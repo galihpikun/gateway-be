@@ -308,6 +308,32 @@ export const getOrders = async (req, res) => {
   try {
     await expirePendingOrders(userId);
 
+    const page = req.query?.page ? Number(req.query.page) : null;
+    const limit = req.query?.limit ? Number(req.query.limit) : null;
+
+    if (page !== null && limit !== null) {
+      const skip = (page - 1) * limit;
+      const [orders, total] = await Promise.all([
+        prisma.order.findMany({
+          where: { userId },
+          include: {
+            orderItems: {
+              include: {
+                ticketType: {
+                  include: { event: true },
+                },
+              },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+          skip,
+          take: limit,
+        }),
+        prisma.order.count({ where: { userId } }),
+      ]);
+      return res.status(200).json(buildPaginatedResponse(orders, total, page, limit));
+    }
+
     const orders = await prisma.order.findMany({
       where: { userId },
       include: {
@@ -387,7 +413,8 @@ export const getAdminOrders = async (req, res) => {
   const skip = (page - 1) * limit;
 
   const where = {};
-  if (req.query?.status) where.paymentStatus = req.query.status;
+  const statusFilter = req.query?.paymentStatus || req.query?.status;
+  if (statusFilter) where.paymentStatus = statusFilter;
   if (req.query?.search) {
     where.OR = [
       { orderNumber: { contains: req.query.search, mode: "insensitive" } },

@@ -508,8 +508,9 @@ export class RefundService {
     }
   }
 
-  static async rejectRefund(adminId, refundId, { reason }) {
-    if (!reason || !reason.trim()) {
+  static async rejectRefund(adminId, refundId, body = {}) {
+    const reason = (body.reason || body.adminReason || body.rejectionReason || "").trim();
+    if (!reason) {
       throw { statusCode: 400, message: "Rejection reason is required" };
     }
 

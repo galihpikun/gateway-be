@@ -28,7 +28,32 @@ export const getAssignedEvents = async (req, res, next) => {
       },
     });
 
-    const eventIds = assignments.map((assignment) => assignment.event.id);
+    let eventList = assignments.map((assignment) => ({
+      event: assignment.event,
+      assignedAt: assignment.createdAt,
+    }));
+
+    if (eventList.length === 0 && req.user?.role === 'ADMIN') {
+      const allPublishedEvents = await prisma.event.findMany({
+        where: { status: 'PUBLISHED' },
+        select: {
+          id: true,
+          title: true,
+          coverImageUrl: true,
+          status: true,
+          location: true,
+          startDatetime: true,
+          endDatetime: true,
+        },
+        orderBy: { startDatetime: 'asc' },
+      });
+      eventList = allPublishedEvents.map((ev) => ({
+        event: ev,
+        assignedAt: new Date().toISOString(),
+      }));
+    }
+
+    const eventIds = eventList.map((item) => item.event.id);
 
     if (eventIds.length === 0) {
       return res.status(200).json([]);
@@ -65,8 +90,7 @@ export const getAssignedEvents = async (req, res, next) => {
 
     const now = new Date();
 
-    const result = assignments.map((assignment) => {
-      const event = assignment.event;
+    const result = eventList.map(({ event, assignedAt }) => {
       const counts = countsByEventId.get(event.id) ?? {
         totalParticipants: 0,
         totalRedeemed: 0,
@@ -86,7 +110,7 @@ export const getAssignedEvents = async (req, res, next) => {
         startDatetime: event.startDatetime,
         endDatetime: event.endDatetime,
         isActive,
-        assignedAt: assignment.createdAt,
+        assignedAt,
         participantSummary: counts,
       };
     });
@@ -127,7 +151,7 @@ export const getEventDashboard = async (req, res, next) => {
       },
     });
 
-    if (!staffAssignment) {
+    if (!staffAssignment && req.user?.role !== 'ADMIN') {
       return res.status(403).json({ message: 'You are not assigned to this event' });
     }
 

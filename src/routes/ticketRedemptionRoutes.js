@@ -8,7 +8,7 @@ import {
 
 const router = express.Router();
 
-router.post('/lookup', requireAuth, requireRoles('STAFF'), lookupTicket);
-router.post('/redeem', requireAuth, requireRoles('STAFF'), redeemTicket);
+router.post('/lookup', requireAuth, requireRoles('STAFF', 'ADMIN'), lookupTicket);
+router.post('/redeem', requireAuth, requireRoles('STAFF', 'ADMIN'), redeemTicket);
 
 export default router;

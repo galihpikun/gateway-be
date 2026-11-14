@@ -46,7 +46,7 @@ export const lookupTicket = async (req, res) => {
     }
 
     const staffAssignment = ticket.orderItem.ticketType.event.staffs;
-    if (staffAssignment.length === 0) {
+    if (req.user?.role !== "ADMIN" && staffAssignment.length === 0) {
       return res.status(403).json({ statusCode: 403, message: "You are not assigned to this event" });
     }
 
@@ -134,7 +134,7 @@ export const redeemTicket = async (req, res) => {
         },
       });
 
-      if (!staffAssignment) {
+      if (req.user?.role !== "ADMIN" && !staffAssignment) {
         throw { statusCode: 403, message: "You are not assigned to this event" };
       }
 

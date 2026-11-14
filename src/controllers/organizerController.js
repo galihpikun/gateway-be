@@ -659,10 +659,10 @@ export const approveDocument = async (req, res) => {
 
 export const rejectDocument = async (req, res) => {
   const { docId } = req.params;
-  const { rejectionReason } = req.body;
+  const rejectionReason = (req.body.rejectionReason || req.body.reason || "").trim();
   const actorId = req.user?.userId || req.user?.id;
 
-  if (!rejectionReason || !rejectionReason.trim()) {
+  if (!rejectionReason) {
     return res.status(400).json({
       statusCode: 400,
       message: "Rejection reason is required",
@@ -791,10 +791,10 @@ export const approveOrganizer = async (req, res) => {
 
 export const rejectOrganizer = async (req, res) => {
   const { id } = req.params;
-  const { rejectionReason } = req.body;
+  const rejectionReason = (req.body.rejectionReason || req.body.reason || "").trim();
   const actorId = req.user?.userId || req.user?.id;
 
-  if (!rejectionReason || !rejectionReason.trim()) {
+  if (!rejectionReason) {
     return res.status(400).json({
       statusCode: 400,
       message: "Rejection reason is required",

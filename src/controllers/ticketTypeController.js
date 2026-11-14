@@ -48,7 +48,7 @@ export const createTicketType = async (req, res) => {
       return res.status(404).json({ statusCode: 404, message: "Event not found" });
     }
 
-    if (event.organizerId !== userId) {
+    if (event.organizerId !== userId && req.user?.role !== "ADMIN") {
       return res.status(403).json({ statusCode: 403, message: "You are not the organizer of this event" });
     }
 
@@ -84,7 +84,7 @@ export const updateTicketType = async (req, res) => {
       return res.status(404).json({ statusCode: 404, message: "Ticket type not found" });
     }
 
-    if (ticketType.event.organizerId !== userId) {
+    if (ticketType.event.organizerId !== userId && req.user?.role !== "ADMIN") {
       return res.status(403).json({ statusCode: 403, message: "You are not the organizer of this event" });
     }
 
@@ -133,7 +133,7 @@ export const deleteTicketType = async (req, res) => {
       return res.status(404).json({ statusCode: 404, message: "Ticket type not found" });
     }
 
-    if (ticketType.event.organizerId !== userId) {
+    if (ticketType.event.organizerId !== userId && req.user?.role !== "ADMIN") {
       return res.status(403).json({ statusCode: 403, message: "You are not the organizer of this event" });
     }
 

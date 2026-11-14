@@ -15,9 +15,9 @@ const router = express.Router();
 
 router.use(requireAuth);
 
-// STAFF routes
-router.get('/events', requireRoles('STAFF'), getAssignedEvents);
-router.get('/events/:eventId/dashboard', requireRoles('STAFF'), getEventDashboard);
+// STAFF & ADMIN routes
+router.get('/events', requireRoles('STAFF', 'ADMIN'), getAssignedEvents);
+router.get('/events/:eventId/dashboard', requireRoles('STAFF', 'ADMIN'), getEventDashboard);
 
 // ADMIN routes
 router.get('/admin', requireRoles('ADMIN'), findAllStaff);

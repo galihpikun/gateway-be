@@ -23,11 +23,22 @@ import { fileURLToPath } from 'url';
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3001;
 
 app.use(cors({
   origin: true,
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Idempotency-Key',
+    'x-callback-token',
+  ],
+  exposedHeaders: ['Authorization'],
 }));
 app.use(express.json());
 app.use(cookieParser());
