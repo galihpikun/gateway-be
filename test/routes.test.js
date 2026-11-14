@@ -55,7 +55,7 @@ test('Verifies that all 14 router modules have valid stacks and active handlers'
     }
   }
 
-  assert.equal(totalEndpoints, 85, 'Total defined router endpoints must equal 85');
+  assert.equal(totalEndpoints, 86, 'Total defined router endpoints must equal 86');
 });
 
 test('Verifies root Express app mounts router cleanly and responds to root route', () => {

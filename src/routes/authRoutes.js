@@ -6,6 +6,7 @@ import {
   register,
   updateMe,
   verifyEmail,
+  resendOtp,
   forgotPassword,
   verifyForgotPassword,
   resetPassword,
@@ -19,6 +20,7 @@ const routerAuth = express.Router();
 
 routerAuth.post("/register", register);
 routerAuth.post("/verify-email", verifyEmail);
+routerAuth.post("/resend-otp", resendOtp);
 routerAuth.post("/login", login);
 routerAuth.post("/forgot-password", forgotPassword);
 routerAuth.post("/verify-forgot-password", verifyForgotPassword);

@@ -21,6 +21,50 @@ export const register = async (req, res) => {
     });
 
     if (emailExists) {
+      if (!emailExists.emailVerified) {
+        // User already started registration previously but hasn't verified email yet
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const updatedUser = await prisma.user.update({
+          where: { id: emailExists.id },
+          data: {
+            fullName: fullName || emailExists.fullName,
+            password: hashedPassword,
+          },
+        });
+
+        // Generate fresh 6 digit OTP
+        const code = crypto.randomInt(100000, 1000000).toString();
+        const otpHash = await bcrypt.hash(code, 10);
+
+        await prisma.otp.create({
+          data: {
+            userId: updatedUser.id,
+            identifier: updatedUser.email,
+            code: otpHash,
+            type: "VERIFY_EMAIL",
+            expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 min
+          },
+        });
+
+        try {
+          await MailService.sendMailVerif(updatedUser.email, code);
+        } catch (mailErr) {
+          console.warn("[Register Warning] MailService delivery:", mailErr.message);
+        }
+
+        return res.status(201).json({
+          statusCode: 201,
+          success: true,
+          message: "User registered successfully, please verify the email of",
+          email: updatedUser.email,
+          data: {
+            id: updatedUser.id,
+            fullName: updatedUser.fullName,
+            email: updatedUser.email,
+          },
+        });
+      }
+
       return res.status(409).json({
         statusCode: 409,
         success: false,
@@ -52,7 +96,11 @@ export const register = async (req, res) => {
       },
     });
 
-    await MailService.sendMailVerif(user.email, code);
+    try {
+      await MailService.sendMailVerif(user.email, code);
+    } catch (mailErr) {
+      console.warn("[Register Warning] MailService delivery:", mailErr.message);
+    }
 
     return res.status(201).json({
       statusCode: 201,
@@ -154,6 +202,69 @@ export const verifyEmail = async (req, res) => {
     });
   } catch (error) {
     console.error("Verify email error:", error);
+    return res.status(500).json({
+      statusCode: 500,
+      message: error.message,
+    });
+  }
+};
+
+export const resendOtp = async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    if (!email) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Email is required",
+      });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: "User not found",
+      });
+    }
+
+    if (user.emailVerified) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Email is already verified",
+      });
+    }
+
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const otpHash = await bcrypt.hash(code, 10);
+
+    await prisma.otp.create({
+      data: {
+        userId: user.id,
+        identifier: user.email,
+        code: otpHash,
+        type: "VERIFY_EMAIL",
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      },
+    });
+
+    try {
+      await MailService.sendMailVerif(user.email, code);
+    } catch (mailErr) {
+      console.warn("[Resend OTP Warning] MailService delivery:", mailErr.message);
+    }
+
+    return res.status(200).json({
+      statusCode: 200,
+      success: true,
+      message: "New verification code has been dispatched",
+      email: user.email,
+    });
+  } catch (error) {
+    console.error("Resend OTP error:", error);
     return res.status(500).json({
       statusCode: 500,
       message: error.message,
