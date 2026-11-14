@@ -22,8 +22,8 @@ router.get('/events/:eventId/dashboard', requireRoles('STAFF'), getEventDashboar
 // ADMIN routes
 router.get('/admin', requireRoles('ADMIN'), findAllStaff);
 router.get('/admin/event/:eventId', requireRoles('ADMIN'), getStaffForEvent);
-router.get('/admin/:id', requireRoles('ADMIN'), findStaffDetail);
 router.post('/admin/assign', requireRoles('ADMIN'), assignStaff);
 router.delete('/admin/assign/:id', requireRoles('ADMIN'), removeAssignment);
+router.get('/admin/:id', requireRoles('ADMIN'), findStaffDetail);
 
 export default router;
