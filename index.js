@@ -1,19 +1,88 @@
 import express from 'express';
-import cors from 'cors'
-import routerAuth from './src/routes/authRoutes';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
+import dotenv from 'dotenv';
 
-const app = express()
-const port = 3000
+import authRoutes from './src/routes/authRoutes.js';
+import categoryRoutes from './src/routes/categoryRoutes.js';
+import organizerRoutes from './src/routes/organizerRoutes.js';
+import eventRoutes from './src/routes/eventRoutes.js';
+import ticketTypeRoutes from './src/routes/ticketTypeRoutes.js';
+import orderRoutes from './src/routes/orderRoutes.js';
+import paymentRoutes from './src/routes/paymentRoutes.js';
+import issuedTicketRoutes from './src/routes/issuedTicketRoutes.js';
+import ticketRedemptionRoutes from './src/routes/ticketRedemptionRoutes.js';
+import staffRoutes from './src/routes/staffRoutes.js';
+import userRoutes from './src/routes/userRoutes.js';
+import adminDashboardRoutes from './src/routes/adminDashboardRoutes.js';
+import auditLogRoutes from './src/routes/auditLogRoutes.js';
+import refundRoutes from './src/routes/refundRoutes.js';
 
+import { fileURLToPath } from 'url';
+
+dotenv.config();
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.use(cors({
+  origin: true,
+  credentials: true,
+}));
 app.use(express.json());
-app.use(cors());
+app.use(cookieParser());
 
 app.get('/', (req, res) => {
-  res.send('Hello World!')
-})
+  res.json({
+    name: 'Gateway Backend API',
+    status: 'online',
+    version: '1.0.0',
+  });
+});
 
-app.use('/api/auth', routerAuth);
+const registerRoutes = (router) => {
+  router.use('/auth', authRoutes);
+  router.use('/categories', categoryRoutes);
+  router.use('/organizer', organizerRoutes);
+  router.use('/events', eventRoutes);
+  router.use('/ticket-types', ticketTypeRoutes);
+  router.use('/orders', orderRoutes);
+  router.use('/payments', paymentRoutes);
+  router.use('/issued-tickets', issuedTicketRoutes);
+  router.use('/ticket-redemption', ticketRedemptionRoutes);
+  router.use('/staff', staffRoutes);
+  router.use('/users', userRoutes);
+  router.use('/admin/dashboard', adminDashboardRoutes);
+  router.use('/audit-logs', auditLogRoutes);
+  router.use('/refunds', refundRoutes);
+};
 
-app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`)
-})
+// Mount routes at both /api prefix and root for full compatibility
+const apiRouter = express.Router();
+registerRoutes(apiRouter);
+app.use('/api', apiRouter);
+
+const rootRouter = express.Router();
+registerRoutes(rootRouter);
+app.use('/', rootRouter);
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  const status = err.status || err.statusCode || 500;
+  const message = err.message || 'Internal server error';
+  res.status(status).json({
+    statusCode: status,
+    message,
+    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
+  });
+});
+
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain && process.env.NODE_ENV !== 'test') {
+  app.listen(port, () => {
+    console.log(`Gateway Backend running on port ${port}`);
+  });
+}
+
+export default app;
