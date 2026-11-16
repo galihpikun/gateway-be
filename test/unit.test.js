@@ -8,6 +8,8 @@ import { buildPaginatedResponse } from '../src/utils/paginate.js';
 import { generateToken } from '../src/utils/generateToken.js';
 import { requireRoles } from '../src/middlewares/roleMiddleware.js';
 import { RefundService, CUSTOMER_REFUND_DEDUCTION_RATE } from '../src/service/refundService.js';
+import { register, login } from '../src/controllers/authController.js';
+import prisma from '../src/service/prisma.js';
 import app from '../index.js';
 
 test('buildPaginatedResponse computes correct pagination metadata', () => {
@@ -102,4 +104,74 @@ test('RefundService deduction calculation matches business rules', () => {
 
 test('Express app initializes with routes defined', () => {
   assert.ok(app);
+});
+
+test('Direct register without OTP creates verified user and allows immediate login', async () => {
+  const testEmail = `test_flow_${Date.now()}@festix.test`;
+  const testPassword = 'Password123!';
+  const testFullName = 'Direct Flow User';
+
+  let regStatus = 0;
+  let regBody = null;
+  const regReq = {
+    body: {
+      fullName: testFullName,
+      email: testEmail,
+      password: testPassword,
+    },
+  };
+  const regRes = {
+    status: (code) => {
+      regStatus = code;
+      return {
+        json: (data) => {
+          regBody = data;
+          return data;
+        },
+      };
+    },
+  };
+
+  await register(regReq, regRes);
+  assert.equal(regStatus, 201, 'Registration must return 201 Created');
+  assert.ok(regBody.data.id, 'Registered user must have an id');
+  assert.equal(regBody.data.emailVerified, true, 'User must be immediately verified');
+
+  // Verify that no OTP records were created
+  const otpRecords = await prisma.otp.findMany({
+    where: { identifier: testEmail },
+  });
+  assert.equal(otpRecords.length, 0, 'No verification OTPs should be generated on register');
+
+  // Immediately log in with the new credentials
+  let loginStatus = 0;
+  let loginBody = null;
+  const loginReq = {
+    body: {
+      email: testEmail.toUpperCase(), // test case-insensitivity
+      password: testPassword,
+    },
+  };
+  const loginRes = {
+    status: (code) => {
+      loginStatus = code;
+      return {
+        json: (data) => {
+          loginBody = data;
+          return data;
+        },
+      };
+    },
+    cookie: () => {},
+  };
+
+  await login(loginReq, loginRes);
+  assert.equal(loginStatus, 200, 'Login must succeed with 200 OK immediately after registration');
+  assert.ok(loginBody.token, 'Login must return an authentication token');
+  assert.equal(loginBody.role, 'USER', 'Role must match user');
+
+  // Cleanup test user
+  await prisma.user.delete({
+    where: { email: testEmail },
+  });
 });

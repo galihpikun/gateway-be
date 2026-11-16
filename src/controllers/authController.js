@@ -16,55 +16,14 @@ export const register = async (req, res) => {
       });
     }
 
+    const normalizedEmail = email.trim().toLowerCase();
+    const cleanFullName = fullName.trim();
+
     const emailExists = await prisma.user.findUnique({
-      where: { email },
+      where: { email: normalizedEmail },
     });
 
     if (emailExists) {
-      if (!emailExists.emailVerified) {
-        // User already started registration previously but hasn't verified email yet
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const updatedUser = await prisma.user.update({
-          where: { id: emailExists.id },
-          data: {
-            fullName: fullName || emailExists.fullName,
-            password: hashedPassword,
-          },
-        });
-
-        // Generate fresh 6 digit OTP
-        const code = crypto.randomInt(100000, 1000000).toString();
-        const otpHash = await bcrypt.hash(code, 10);
-
-        await prisma.otp.create({
-          data: {
-            userId: updatedUser.id,
-            identifier: updatedUser.email,
-            code: otpHash,
-            type: "VERIFY_EMAIL",
-            expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 min
-          },
-        });
-
-        try {
-          await MailService.sendMailVerif(updatedUser.email, code);
-        } catch (mailErr) {
-          console.warn("[Register Warning] MailService delivery:", mailErr.message);
-        }
-
-        return res.status(201).json({
-          statusCode: 201,
-          success: true,
-          message: "User registered successfully, please verify the email of",
-          email: updatedUser.email,
-          data: {
-            id: updatedUser.id,
-            fullName: updatedUser.fullName,
-            email: updatedUser.email,
-          },
-        });
-      }
-
       return res.status(409).json({
         statusCode: 409,
         success: false,
@@ -76,41 +35,32 @@ export const register = async (req, res) => {
 
     const user = await prisma.user.create({
       data: {
-        fullName,
-        email,
+        fullName: cleanFullName,
+        email: normalizedEmail,
         password: hashedPassword,
+        emailVerified: true,
+      },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        role: true,
+        emailVerified: true,
+        createdAt: true,
       },
     });
-
-    // Generate 6 digit OTP
-    const code = crypto.randomInt(100000, 1000000).toString();
-    const otpHash = await bcrypt.hash(code, 10);
-
-    await prisma.otp.create({
-      data: {
-        userId: user.id,
-        identifier: user.email,
-        code: otpHash,
-        type: "VERIFY_EMAIL",
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 min
-      },
-    });
-
-    try {
-      await MailService.sendMailVerif(user.email, code);
-    } catch (mailErr) {
-      console.warn("[Register Warning] MailService delivery:", mailErr.message);
-    }
 
     return res.status(201).json({
       statusCode: 201,
       success: true,
-      message: "User registered successfully, please verify the email of",
+      message: "User registered successfully",
       email: user.email,
       data: {
         id: user.id,
         fullName: user.fullName,
         email: user.email,
+        role: user.role,
+        emailVerified: user.emailVerified,
       },
     });
   } catch (error) {
@@ -282,9 +232,11 @@ export const login = async (req, res) => {
     });
   }
 
+  const normalizedEmail = email.trim().toLowerCase();
+
   try {
     const user = await prisma.user.findUnique({
-      where: { email },
+      where: { email: normalizedEmail },
     });
 
     if (!user) {
@@ -295,12 +247,14 @@ export const login = async (req, res) => {
       });
     }
 
+    // Auto-heal any existing unverified accounts so they authenticate immediately
     if (!user.emailVerified) {
-      return res.status(401).json({
-        statusCode: 401,
-        success: false,
-        message: "Email not Verified",
-      });
+      await prisma.user
+        .update({
+          where: { id: user.id },
+          data: { emailVerified: true },
+        })
+        .catch(() => {});
     }
 
     if (user.isSuspended) {
