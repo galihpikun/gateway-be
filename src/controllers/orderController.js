@@ -49,7 +49,7 @@ async function expireOrder(orderId) {
   });
 }
 
-async function expirePendingOrders(userId) {
+export async function expirePendingOrders(userId) {
   const expiredOrders = await prisma.order.findMany({
     where: {
       paymentStatus: "PENDING",
@@ -172,6 +172,8 @@ export const createOrder = async (req, res) => {
     const orderNumber = generateOrderNumber(now);
 
     const order = await prisma.$transaction(async (tx) => {
+      const firstType = await tx.ticketType.findUnique({ where: { id: dto.items[0].ticketTypeId } });
+      if (firstType) await tx.$queryRaw(Prisma.sql`SELECT id FROM events WHERE id = ${firstType.eventId} FOR UPDATE`);
       const ticketTypes = await Promise.all(
         dto.items.map((item) =>
           tx.ticketType.findUnique({
@@ -341,6 +343,7 @@ export const getOrders = async (req, res) => {
     const orders = await prisma.order.findMany({
       where: { userId },
       include: {
+        refunds: true,
         orderItems: {
           include: {
             ticketType: {
@@ -367,6 +370,7 @@ export const getOrderDetail = async (req, res) => {
     let order = await prisma.order.findUnique({
       where: { id },
       include: {
+        refunds: true,
         orderItems: {
           include: {
             ticketType: {

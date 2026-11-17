@@ -19,6 +19,9 @@ import auditLogRoutes from './src/routes/auditLogRoutes.js';
 import refundRoutes from './src/routes/refundRoutes.js';
 
 import { fileURLToPath } from 'url';
+import { expirePendingOrders } from './src/controllers/orderController.js';
+import RefundService from './src/service/refundService.js';
+import PaymentService from './src/service/paymentService.js';
 
 dotenv.config();
 
@@ -91,6 +94,18 @@ app.use((err, req, res, next) => {
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain && process.env.NODE_ENV !== 'test') {
+  let maintenanceRunning = false;
+  const maintain = async () => {
+    if (maintenanceRunning) return;
+    maintenanceRunning = true;
+    try {
+      for (const task of [() => expirePendingOrders(), () => RefundService.processQueuedRefunds(), () => PaymentService.reconcilePayments()]) {
+        try { await task(); } catch (error) { console.error("Maintenance failed:", error.message); }
+      }
+    } finally { maintenanceRunning = false; }
+  };
+  setInterval(maintain, 30000).unref();
+  void maintain();
   app.listen(port, () => {
     console.log(`Gateway Backend running on port ${port}`);
   });

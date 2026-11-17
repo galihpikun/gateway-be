@@ -16,6 +16,7 @@ import {
   getOrganizerEventDetail,
   getOrganizerEventCheckin,
   removeOrganizerStaff,
+  inviteOrganizerStaff,
   searchInvitableUsers,
 } from "../controllers/eventController.js";
 import { jwtMiddleware } from "../middlewares/jwtMiddleware.js";
@@ -38,6 +39,7 @@ router.patch("/admin/:id/cancel", jwtMiddleware, requireAdmin, cancelEvent);
 // Organizer routes (MUST be defined before :id)
 router.get("/organizer/my-events", jwtMiddleware, getMyEvents);
 router.get("/organizer/:id/checkin", jwtMiddleware, getOrganizerEventCheckin);
+router.post("/organizer/:eventId/staff", jwtMiddleware, inviteOrganizerStaff);
 router.delete("/organizer/:eventId/staff/:assignmentId", jwtMiddleware, removeOrganizerStaff);
 router.get("/organizer/:id", jwtMiddleware, getOrganizerEventDetail);
 router.get("/search-invitable-users", jwtMiddleware, searchInvitableUsers);

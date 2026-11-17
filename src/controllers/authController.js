@@ -204,7 +204,7 @@ export const resendOtp = async (req, res) => {
     try {
       await MailService.sendMailVerif(user.email, code);
     } catch (mailErr) {
-      console.warn("[Resend OTP Warning] MailService delivery:", mailErr.message);
+      throw mailErr;
     }
 
     return res.status(200).json({
@@ -245,16 +245,6 @@ export const login = async (req, res) => {
         success: false,
         message: "Invalid Email or Password",
       });
-    }
-
-    // Auto-heal any existing unverified accounts so they authenticate immediately
-    if (!user.emailVerified) {
-      await prisma.user
-        .update({
-          where: { id: user.id },
-          data: { emailVerified: true },
-        })
-        .catch(() => {});
     }
 
     if (user.isSuspended) {

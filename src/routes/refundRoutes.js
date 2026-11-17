@@ -2,6 +2,7 @@ import express from "express";
 import {
   createRefund,
   getMyRefunds,
+  getOrganizerRefunds,
   getRefundDetail,
   getAdminRefunds,
   getAdminRefundDetail,
@@ -20,6 +21,7 @@ router.post("/webhook", handleRefundWebhook);
 // Customer routes
 router.post("/", jwtMiddleware, createRefund);
 router.get("/my", jwtMiddleware, getMyRefunds);
+router.get("/organizer", jwtMiddleware, getOrganizerRefunds);
 
 // Admin routes (placed before customer :id to avoid route collision)
 router.get("/admin", jwtMiddleware, requireAdmin, getAdminRefunds);

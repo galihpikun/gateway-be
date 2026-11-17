@@ -1,8 +1,8 @@
-import prisma from "../service/prisma.js";
+import prisma, { Prisma } from "../service/prisma.js";
 
 export const lookupTicket = async (req, res) => {
   const userId = req.user?.userId || req.user?.id;
-  const { ticketCode } = req.body;
+  const { ticketCode, eventId } = req.body;
 
   if (!ticketCode || !ticketCode.trim()) {
     return res.status(400).json({ statusCode: 400, message: "Ticket code is required" });
@@ -51,6 +51,7 @@ export const lookupTicket = async (req, res) => {
     }
 
     const event = ticket.orderItem.ticketType.event;
+    if (!eventId || eventId !== event.id) return res.status(409).json({ message: "Ticket belongs to another event" });
 
     return res.status(200).json({
       id: ticket.id,
@@ -87,7 +88,7 @@ export const lookupTicket = async (req, res) => {
 
 export const redeemTicket = async (req, res) => {
   const userId = req.user?.userId || req.user?.id;
-  const { ticketCode } = req.body;
+  const { ticketCode, eventId } = req.body;
 
   if (!ticketCode || !ticketCode.trim()) {
     return res.status(400).json({ statusCode: 400, message: "Ticket code is required" });
@@ -123,7 +124,12 @@ export const redeemTicket = async (req, res) => {
         throw { statusCode: 404, message: "Ticket not found" };
       }
 
-      const event = ticket.orderItem.ticketType.event;
+      const ticketEvent = ticket.orderItem.ticketType.event;
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM events WHERE id = ${ticketEvent.id} FOR UPDATE`);
+      const event = await tx.event.findUnique({ where: { id: ticketEvent.id } });
+      if (!eventId || eventId !== event.id) throw { statusCode: 409, message: "Ticket belongs to another event" };
+      const activeRefund = await tx.refund.findFirst({ where: { orderId: ticket.orderItem.orderId, eventId, status: { in: ["PENDING_APPROVAL", "APPROVED", "PROCESSING"] } } });
+      if (activeRefund) throw { statusCode: 409, message: "Ticket is locked while a refund is pending" };
 
       const staffAssignment = await tx.eventStaff.findUnique({
         where: {

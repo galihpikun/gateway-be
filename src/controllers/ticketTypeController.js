@@ -38,6 +38,7 @@ export const createTicketType = async (req, res) => {
   const userId = req.user?.userId || req.user?.id;
   const { eventId } = req.params;
   const { name, price, quota } = req.body;
+  if ((price !== undefined && (!Number.isFinite(Number(price)) || Number(price) < 0)) || (quota !== undefined && (!Number.isSafeInteger(Number(quota)) || Number(quota) < 1)) || (name !== undefined && (typeof name !== "string" || !name.trim()))) return res.status(400).json({ message: "Name, non-negative price and positive integer quota are required" });
 
   try {
     const event = await prisma.event.findUnique({
@@ -52,6 +53,8 @@ export const createTicketType = async (req, res) => {
       return res.status(403).json({ statusCode: 403, message: "You are not the organizer of this event" });
     }
 
+    if (!["DRAFT", "REJECTED"].includes(event.status)) return res.status(409).json({ message: "Ticket tiers may only change on draft or rejected events" });
+    if (!name || price === undefined || quota === undefined) return res.status(400).json({ message: "Name, price and quota are required" });
     const ticketType = await prisma.ticketType.create({
       data: {
         name,
@@ -73,6 +76,7 @@ export const updateTicketType = async (req, res) => {
   const userId = req.user?.userId || req.user?.id;
   const { id } = req.params;
   const { name, price, quota } = req.body;
+  if ((price !== undefined && (!Number.isFinite(Number(price)) || Number(price) < 0)) || (quota !== undefined && (!Number.isSafeInteger(Number(quota)) || Number(quota) < 1)) || (name !== undefined && (typeof name !== "string" || !name.trim()))) return res.status(400).json({ message: "Name, non-negative price and positive integer quota are required" });
 
   try {
     const ticketType = await prisma.ticketType.findUnique({
@@ -88,6 +92,7 @@ export const updateTicketType = async (req, res) => {
       return res.status(403).json({ statusCode: 403, message: "You are not the organizer of this event" });
     }
 
+    if (!["DRAFT", "REJECTED"].includes(ticketType.event.status)) return res.status(409).json({ message: "Ticket tiers may only change on draft or rejected events" });
     const soldQuota = ticketType.quota - ticketType.availableQuota;
 
     if (quota !== undefined && Number(quota) < soldQuota) {
@@ -137,6 +142,7 @@ export const deleteTicketType = async (req, res) => {
       return res.status(403).json({ statusCode: 403, message: "You are not the organizer of this event" });
     }
 
+    if (!["DRAFT", "REJECTED"].includes(ticketType.event.status)) return res.status(409).json({ message: "Ticket tiers may only change on draft or rejected events" });
     if (ticketType.orderItems.length > 0) {
       return res.status(409).json({
         statusCode: 409,

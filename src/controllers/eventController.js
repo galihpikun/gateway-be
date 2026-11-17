@@ -45,7 +45,9 @@ export const getMostPopularEvents = async (req, res) => {
       },
     });
 
-    return res.status(200).json(events);
+    const ranked = await Promise.all(events.map(async event => ({ event, sold: await prisma.issuedTicket.count({ where: { isCancelled: false, isRefunded: false, orderItem: { ticketType: { eventId: event.id }, order: { paymentStatus: "PAID" } } } }) })));
+    ranked.sort((a, b) => b.sold - a.sold || a.event.startDatetime - b.event.startDatetime);
+    return res.status(200).json(ranked.map(row => row.event));
   } catch (error) {
     console.error("Get most popular events error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
@@ -96,6 +98,10 @@ export const createEvent = async (req, res) => {
   const files = req.files || {};
 
   try {
+    let tiers = [];
+    try { tiers = req.body.ticketTypes ? JSON.parse(req.body.ticketTypes) : []; }
+    catch { return res.status(400).json({ message: "Invalid ticket types" }); }
+    if (!Array.isArray(tiers) || tiers.some(t => !t || typeof t.name !== "string" || !t.name.trim() || !Number.isFinite(t.price) || t.price < 0 || !Number.isSafeInteger(t.quota) || t.quota < 1)) return res.status(400).json({ message: "Invalid ticket type name, price or quota" });
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: { organizerProfile: true },
@@ -215,6 +221,7 @@ export const createEvent = async (req, res) => {
           endDatetime,
           isRefundable,
           status: "DRAFT",
+          ticketTypes: { create: tiers.map(t => ({ name: t.name.trim(), price: t.price, quota: t.quota, availableQuota: t.quota })) },
         },
       });
 
@@ -724,7 +731,8 @@ export const cancelEvent = async (req, res) => {
     }
 
     const updatedEvent = await prisma.$transaction(async (tx) => {
-      if (event.isRefundable) {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM events WHERE id = ${eventId} FOR UPDATE`);
+      {
         await RefundService.triggerAutomaticEventCancellationRefunds(
           eventId,
           reason.trim(),
@@ -1083,4 +1091,27 @@ export const searchInvitableUsers = async (req, res) => {
     console.error("Search invitable users error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }
+};
+
+export const inviteOrganizerStaff = async (req, res) => {
+  try {
+    const actorId = req.user.id;
+    const { eventId } = req.params;
+    const targetId = req.body.userId;
+    if (!targetId || targetId === actorId) return res.status(400).json({ message: "Choose another verified user" });
+    await prisma.$transaction(async tx => {
+      const event = await tx.event.findUnique({ where: { id: eventId }, include: { organizer: { include: { organizerProfile: true } } } });
+      if (!event || event.organizerId !== actorId || event.organizer.organizerProfile?.status !== "APPROVED") throw { statusCode: 403, message: "Only the approved event organizer may invite staff" };
+      if (!["DRAFT", "REJECTED", "PENDING_REVIEW", "PUBLISHED"].includes(event.status)) throw { statusCode: 409, message: "Event is closed" };
+      const user = await tx.user.findUnique({ where: { id: targetId } });
+      if (!user || !user.emailVerified || user.isSuspended || user.role === "ADMIN") throw { statusCode: 400, message: "User is not eligible for staff assignment" };
+      await tx.staffInvitation.upsert({ where: { eventId_userId: { eventId, userId: targetId } }, create: { eventId, userId: targetId, activated: event.status === "PUBLISHED" }, update: { activated: event.status === "PUBLISHED" } });
+      if (event.status === "PUBLISHED") {
+        await tx.user.update({ where: { id: targetId }, data: { role: "STAFF" } });
+        await tx.eventStaff.upsert({ where: { eventId_userId: { eventId, userId: targetId } }, create: { eventId, userId: targetId }, update: {} });
+      }
+      await AuditLogService.log(actorId, "INVITE_STAFF", "Event", eventId, { userId: targetId }, tx);
+    });
+    return res.json({ message: "Staff invitation saved; published events grant gate access immediately" });
+  } catch (error) { return res.status(error.statusCode || 500).json({ message: error.message }); }
 };

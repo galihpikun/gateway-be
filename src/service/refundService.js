@@ -59,28 +59,24 @@ export class RefundService {
 
   static async createXenditRefund(payload) {
     const secretKey = process.env.XENDIT_SECRET_KEY;
-    if (!secretKey) {
-      // Mock for test environments when key not set
-      return {
-        id: `mock_ref_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        status: "PENDING",
-      };
-    }
-
+    if (!secretKey) throw new Error("XENDIT_SECRET_KEY is required");
     const authHeader = Buffer.from(`${secretKey}:`).toString("base64");
     const body = {
-      payment_id: payload.paymentId,
+      ...(payload.paymentId.startsWith("py-") ? { payment_id: payload.paymentId } : { payment_request_id: payload.paymentId }),
+      reference_id: payload.idempotencyKey,
+      ...(!payload.paymentId.startsWith("py-") && { currency: "IDR" }),
       amount: payload.amount,
-      reason: payload.reason || "REQUESTED_BY_CUSTOMER",
+      reason: ["FRAUDULENT", "DUPLICATE", "REQUESTED_BY_CUSTOMER", "CANCELLATION", "OTHERS"].includes(payload.reason) ? payload.reason : "REQUESTED_BY_CUSTOMER",
       ...(payload.metadata && { metadata: payload.metadata }),
     };
 
-    const res = await fetch("https://api.xendit.co/refunds", {
+    const res = await fetch(payload.paymentId.startsWith("py-") ? "https://api.xendit.co/v3/refunds" : "https://api.xendit.co/refunds", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Basic ${authHeader}`,
         "Idempotency-key": payload.idempotencyKey,
+        ...(payload.paymentId.startsWith("py-") && { "api-version": "2024-11-11" }),
       },
       body: JSON.stringify(body),
     });
@@ -91,10 +87,11 @@ export class RefundService {
       throw new Error(errorMsg);
     }
 
-    return data;
+    return { ...data, id: data.refund_id || data.id };
   }
 
   static async createCustomerRefund(userId, { orderId, reason }) {
+    if (typeof orderId !== "string" || typeof reason !== "string" || !reason.trim()) throw { statusCode: 400, message: "Order and refund reason are required" };
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: {
@@ -141,7 +138,11 @@ export class RefundService {
 
     await prisma.$transaction(async (tx) => {
       for (const [, items] of itemsByEvent.entries()) {
-        const event = items[0].ticketType.event;
+        const eventId = items[0].ticketType.event.id;
+        await tx.$queryRaw(Prisma.sql`SELECT id FROM events WHERE id = ${eventId} FOR UPDATE`);
+        const event = await tx.event.findUnique({ where: { id: eventId } });
+        const redeemedNow = await tx.issuedTicket.count({ where: { isRedeemed: true, orderItem: { orderId: order.id, ticketType: { eventId } } } });
+        if (redeemedNow) throw { statusCode: 409, message: "Tickets have already been used" };
 
         if (!event.isRefundable) {
           throw { statusCode: 400, message: `Event "${event.title}" is marked as non-refundable` };
@@ -218,6 +219,8 @@ export class RefundService {
         const cumulativeSum = pastRefunds.reduce((acc, r) => acc.add(r.amount), new Prisma.Decimal(0));
         this.validateCumulativeRefund(cumulativeSum, calculation.refundAmount, order.totalAmount);
 
+        const previous = await tx.refund.findUnique({ where: { order_event_refund_unique: { orderId: order.id, eventId: event.id, type: "CUSTOMER_REQUEST" } } });
+        if (previous) throw { statusCode: 409, message: "A request already exists. Contact an administrator to retry a failed refund." };
         const refund = await tx.refund.create({
           data: {
             orderId: order.id,
@@ -277,13 +280,13 @@ export class RefundService {
     };
   }
 
-  static async getCustomerRefunds(userId, query) {
+  static async getCustomerRefunds(userId, query, organizer = false) {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 10;
     const skip = (page - 1) * limit;
 
     const where = {
-      requestedById: userId,
+      ...(organizer ? { event: { organizerId: userId } } : { requestedById: userId }),
       ...(query.status && { status: query.status }),
       ...(query.type && { type: query.type }),
     };
@@ -413,98 +416,56 @@ export class RefundService {
   }
 
   static async approveRefund(adminId, refundId) {
-    const refund = await prisma.refund.findUnique({
-      where: { id: refundId },
-      include: { order: true, event: true },
-    });
+    await prisma.$transaction(async tx => {
+      const refund = await tx.refund.findUnique({ where: { id: refundId }, include: { event: true } });
+      if (!refund) throw { statusCode: 404, message: "Refund not found" };
+      if (!["PENDING_APPROVAL", "FAILED"].includes(refund.status)) throw { statusCode: 409, message: "Refund is not awaiting approval or retry" };
+      const redeemed = await tx.issuedTicket.count({ where: { isRedeemed: true, orderItem: { orderId: refund.orderId, ticketType: { eventId: refund.eventId } } } });
+      if (redeemed && refund.type === "CUSTOMER_REQUEST" && refund.event.status !== "CANCELLED") throw { statusCode: 409, message: "Tickets have already been used" };
+      if (refund.type === "CUSTOMER_REQUEST" && refund.event.status !== "CANCELLED" && new Date() >= refund.event.startDatetime) throw { statusCode: 409, message: "Event has already started" };
+      const claimed = await tx.refund.updateMany({ where: { id: refundId, status: refund.status }, data: { status: "APPROVED", approvedById: adminId, approvedAt: new Date(), failureReason: null, failedAt: null, ...(refund.status === "FAILED" && { idempotencyKey: randomUUID(), pgRefundId: null }) } });
+      if (!claimed.count) throw { statusCode: 409, message: "Refund was already processed" };
+      await AuditLogService.log(adminId, "APPROVE_REFUND", "Refund", refundId, {}, tx);
+    }, { isolationLevel: "Serializable" });
+    return { message: "Refund approved and queued for processing", refund: await prisma.refund.findUnique({ where: { id: refundId } }) };
+  }
 
-    if (!refund) {
-      throw { statusCode: 404, message: "Refund not found" };
-    }
-
-    if (refund.status !== "PENDING_APPROVAL") {
-      throw { statusCode: 409, message: `Refund cannot be approved from status "${refund.status}"` };
-    }
-
-    const now = new Date();
-    const updated = await prisma.refund.updateMany({
-      where: { id: refund.id, status: "PENDING_APPROVAL" },
-      data: {
-        status: "APPROVED",
-        approvedById: adminId,
-        approvedAt: now,
-      },
-    });
-
-    if (updated.count === 0) {
-      throw { statusCode: 409, message: "Refund is no longer pending approval" };
-    }
-
-    await AuditLogService.log(adminId, "APPROVE_REFUND", "Refund", refund.id, {
-      orderId: refund.orderId,
-      eventId: refund.eventId,
-      amount: refund.amount.toFixed(2),
-    });
-
-    const paymentId = refund.order.pgTransactionId;
-    if (!paymentId) {
-      await prisma.refund.update({
-        where: { id: refund.id },
-        data: {
-          status: "FAILED",
-          failedAt: new Date(),
-          failureReason: "Order does not have a payment gateway transaction ID",
-        },
-      });
-      throw { statusCode: 400, message: "Order lacks a payment gateway transaction identifier" };
-    }
-
-    try {
-      const xenditRes = await this.createXenditRefund({
-        paymentId,
-        amount: Number(refund.amount),
-        reason: refund.reason,
-        idempotencyKey: refund.idempotencyKey || randomUUID(),
-        metadata: {
-          refundId: refund.id,
-          orderId: refund.orderId,
-          eventId: refund.eventId,
-        },
-      });
-
-      const processedRefund = await prisma.refund.update({
-        where: { id: refund.id },
-        data: {
-          status: "PROCESSING",
-          pgRefundId: xenditRes.id,
-        },
-      });
-
-      await AuditLogService.log(adminId, "INITIATE_REFUND", "Refund", refund.id, {
-        pgRefundId: xenditRes.id,
-        status: "PROCESSING",
-      });
-
-      return {
-        message: "Refund approved and processing initiated",
-        refund: processedRefund,
-      };
-    } catch (err) {
-      const errMsg = err.message || "Payment gateway refund request failed";
-      await prisma.refund.update({
-        where: { id: refund.id },
-        data: {
-          status: "FAILED",
-          failedAt: new Date(),
-          failureReason: errMsg,
-        },
-      });
-
-      await AuditLogService.log(adminId, "FAIL_REFUND", "Refund", refund.id, {
-        failureReason: errMsg,
-      });
-
-      throw { statusCode: 502, message: errMsg };
+  static async processQueuedRefunds() {
+    const jobs = await prisma.refund.findMany({ where: { status: { in: ["APPROVED", "PROCESSING"] } }, include: { order: true }, take: 20, orderBy: { updatedAt: "asc" } });
+    for (const job of jobs) {
+      try {
+        if (job.pgRefundId) {
+          const modern = job.order.pgTransactionId?.startsWith("py-");
+          const response = await fetch(`https://api.xendit.co/${modern ? "v3/" : ""}refunds/${encodeURIComponent(job.pgRefundId)}`, { headers: { Authorization: `Basic ${Buffer.from(`${process.env.XENDIT_SECRET_KEY}:`).toString("base64")}`, ...(modern && { "api-version": "2024-11-11" }) }, signal: AbortSignal.timeout(10000) });
+          if (!response.ok) throw new Error("Cannot reconcile gateway refund; queued for retry");
+          const data = await response.json();
+          const refund = await this.getAdminRefundDetail(job.id);
+          if (data.status === "SUCCEEDED") await this.finalizeRefundSucceeded(refund, job.pgRefundId);
+          else if (data.status === "FAILED") await this.finalizeRefundFailed(refund, job.pgRefundId, data.failure_reason || data.failure_code);
+          else await prisma.refund.updateMany({ where: { id: job.id, status: "PROCESSING" }, data: { updatedAt: new Date() } });
+          continue;
+        }
+        let paymentId = job.order.pgTransactionId;
+        if (paymentId?.startsWith("ps-")) {
+          const response = await fetch(`https://api.xendit.co/sessions/${encodeURIComponent(paymentId)}`, { headers: { Authorization: `Basic ${Buffer.from(`${process.env.XENDIT_SECRET_KEY}:`).toString("base64")}` }, signal: AbortSignal.timeout(10000) });
+          if (!response.ok) throw new Error("Cannot retrieve payment for refund; queued for retry");
+          const session = await response.json();
+          paymentId = session.payment_id || session.payment_request_id;
+          if (paymentId) await prisma.order.updateMany({ where: { id: job.orderId, pgTransactionId: job.order.pgTransactionId }, data: { pgTransactionId: paymentId } });
+        }
+        if (!paymentId || !/^(py-|pr-)/.test(paymentId)) throw new Error("Payment reference unavailable; queued for reconciliation");
+        const claim = await prisma.refund.updateMany({ where: { id: job.id, status: { in: ["APPROVED", "PROCESSING"] }, pgRefundId: null }, data: { status: "PROCESSING" } });
+        if (!claim.count) continue;
+        const response = await this.createXenditRefund({ paymentId, amount: Number(job.amount), reason: job.type === "EVENT_CANCELLATION" ? "CANCELLATION" : "REQUESTED_BY_CUSTOMER", idempotencyKey: job.idempotencyKey, metadata: { refundId: job.id, refundKey: job.idempotencyKey } });
+        if (!response.id) throw new Error("Refund response lacks its identifier");
+        await prisma.refund.updateMany({ where: { id: job.id, status: { in: ["APPROVED", "PROCESSING"] } }, data: { pgRefundId: response.id, failureReason: null } });
+        const currentRefund = await this.getAdminRefundDetail(job.id);
+        if (response.status === "SUCCEEDED") await this.finalizeRefundSucceeded(currentRefund, response.id);
+        else if (response.status === "FAILED") await this.finalizeRefundFailed(currentRefund, response.id, response.failure_reason || response.failure_code);
+      } catch (error) {
+        // Keep durable queue state on transport/configuration errors; retry with the same key.
+        await prisma.refund.updateMany({ where: { id: job.id, status: { in: ["APPROVED", "PROCESSING"] } }, data: { failureReason: error.message } });
+      }
     }
   }
 
@@ -555,7 +516,7 @@ export class RefundService {
   }
 
   static async handleWebhook(token, body) {
-    if (token !== process.env.XENDIT_WEBHOOK_TOKEN) {
+    if (!process.env.XENDIT_WEBHOOK_TOKEN || token !== process.env.XENDIT_WEBHOOK_TOKEN) {
       throw { statusCode: 403, message: "Invalid webhook verification token" };
     }
 
@@ -597,6 +558,9 @@ export class RefundService {
       throw { statusCode: 404, message: "Associated refund record not found" };
     }
 
+    const callbackKey = data.metadata?.refundKey || body.metadata?.refundKey;
+    if (pgRefundId && refund.pgRefundId !== pgRefundId && callbackKey !== refund.idempotencyKey) return { message: "Stale or unmatched refund callback acknowledged; reconciliation will confirm status" };
+
     if (refund.status === "SUCCEEDED" || refund.status === "FAILED") {
       return { message: "Refund webhook already processed" };
     }
@@ -617,6 +581,9 @@ export class RefundService {
     const now = new Date();
 
     await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM orders WHERE id = ${refund.orderId} FOR UPDATE`);
+      refund = await tx.refund.findUnique({ where: { id: refund.id }, include: { order: { include: { orderItems: { include: { ticketType: true, issuedTickets: true } } } } } });
+
       const updateResult = await tx.refund.updateMany({
         where: {
           id: refund.id,
@@ -657,7 +624,7 @@ export class RefundService {
           where: { id: item.ticketTypeId },
           data: {
             availableQuota: {
-              increment: item.quantity,
+              increment: item.issuedTickets.filter(t => !t.isRefunded).length,
             },
           },
         });
@@ -732,9 +699,6 @@ export class RefundService {
       throw { statusCode: 404, message: "Event not found" };
     }
 
-    if (!event.isRefundable) {
-      return { count: 0, message: "Event is non-refundable" };
-    }
 
     const itemsByOrder = new Map();
     for (const tt of event.ticketTypes) {
@@ -769,7 +733,11 @@ export class RefundService {
         new Prisma.Decimal(0)
       );
 
-      const calculation = this.calculateCancellationRefund(eligibleAmount);
+      const prior = await client.refund.findMany({ where: { orderId, eventId, status: { in: ["APPROVED", "PROCESSING", "SUCCEEDED"] } }, select: { amount: true } });
+      const remaining = eligibleAmount.sub(prior.reduce((sum, row) => sum.add(row.amount), new Prisma.Decimal(0)));
+      await client.refund.updateMany({ where: { orderId, eventId, status: "PENDING_APPROVAL" }, data: { status: "REJECTED", adminReason: "Replaced by automatic event cancellation refund" } });
+      if (remaining.lessThanOrEqualTo(0)) continue;
+      const calculation = this.calculateCancellationRefund(remaining);
 
       const refund = await client.refund.create({
         data: {
@@ -808,39 +776,6 @@ export class RefundService {
         amount: calculation.refundAmount.toNumber(),
         reason: refund.reason,
         idempotencyKey: refund.idempotencyKey,
-      });
-    }
-
-    if (createdRefunds.length > 0) {
-      setImmediate(async () => {
-        for (const job of createdRefunds) {
-          try {
-            if (!job.paymentId) continue;
-            const res = await RefundService.createXenditRefund({
-              paymentId: job.paymentId,
-              amount: job.amount,
-              reason: job.reason,
-              idempotencyKey: job.idempotencyKey || randomUUID(),
-              metadata: { refundId: job.refundId, eventId },
-            });
-            await prisma.refund.update({
-              where: { id: job.refundId },
-              data: {
-                status: "PROCESSING",
-                pgRefundId: res.id,
-              },
-            });
-          } catch (err) {
-            await prisma.refund.update({
-              where: { id: job.refundId },
-              data: {
-                status: "FAILED",
-                failedAt: new Date(),
-                failureReason: err.message,
-              },
-            });
-          }
-        }
       });
     }
 

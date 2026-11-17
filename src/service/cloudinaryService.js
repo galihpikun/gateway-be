@@ -11,14 +11,7 @@ cloudinary.config({
 
 export class CloudinaryService {
   static async uploadImage(file, folder = "ticket-booking") {
-    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY) {
-      // Mock fallback for test environment without active cloudinary credentials
-      const mockId = `mock_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      return {
-        secure_url: `https://res.cloudinary.com/mock/image/upload/${mockId}.jpg`,
-        public_id: mockId,
-      };
-    }
+    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) throw new Error("Cloudinary credentials are required");
 
     return new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(

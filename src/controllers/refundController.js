@@ -115,3 +115,8 @@ export const handleRefundWebhook = async (req, res) => {
     });
   }
 };
+
+export const getOrganizerRefunds = async (req, res) => {
+  try { return res.json(await RefundService.getCustomerRefunds(req.user.id, req.query, true)); }
+  catch (error) { return res.status(error.statusCode || 500).json({ message: error.message }); }
+};
