@@ -21,7 +21,7 @@ import {
 } from "../controllers/eventController.js";
 import { jwtMiddleware } from "../middlewares/jwtMiddleware.js";
 import { requireAdmin } from "../middlewares/roleMiddleware.js";
-import upload from "../middlewares/uploadMiddleware.js";
+import { eventUpload as upload } from "../middlewares/uploadMiddleware.js";
 
 const router = express.Router();
 
@@ -51,6 +51,7 @@ router.post(
   upload.fields([
     { name: "coverImage", maxCount: 1 },
     { name: "venueImage", maxCount: 1 },
+    { name: "previewVideo", maxCount: 1 },
   ]),
   createEvent
 );
@@ -65,6 +66,7 @@ router.patch(
   upload.fields([
     { name: "coverImage", maxCount: 1 },
     { name: "venueImage", maxCount: 1 },
+    { name: "previewVideo", maxCount: 1 },
   ]),
   updateEvent
 );

@@ -10,3 +10,5 @@ export const upload = multer({
 });
 
 export default upload;
+
+export const eventUpload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024, files: 3 } });

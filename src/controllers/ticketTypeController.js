@@ -1,3 +1,4 @@
+import { validViewPosition } from "../utils/previewValidation.js";
 import prisma from "../service/prisma.js";
 
 export const getTicketTypes = async (req, res) => {
@@ -37,7 +38,8 @@ export const getTicketTypeDetail = async (req, res) => {
 export const createTicketType = async (req, res) => {
   const userId = req.user?.userId || req.user?.id;
   const { eventId } = req.params;
-  const { name, price, quota } = req.body;
+  const { name, price, quota, viewPosition } = req.body;
+  if (!validViewPosition(viewPosition)) return res.status(400).json({ message: "Invalid viewing zone" });
   if ((price !== undefined && (!Number.isFinite(Number(price)) || Number(price) < 0)) || (quota !== undefined && (!Number.isSafeInteger(Number(quota)) || Number(quota) < 1)) || (name !== undefined && (typeof name !== "string" || !name.trim()))) return res.status(400).json({ message: "Name, non-negative price and positive integer quota are required" });
 
   try {
@@ -61,6 +63,7 @@ export const createTicketType = async (req, res) => {
         price,
         quota: Number(quota),
         availableQuota: Number(quota),
+        viewPosition: viewPosition || null,
         eventId,
       },
     });
@@ -75,7 +78,8 @@ export const createTicketType = async (req, res) => {
 export const updateTicketType = async (req, res) => {
   const userId = req.user?.userId || req.user?.id;
   const { id } = req.params;
-  const { name, price, quota } = req.body;
+  const { name, price, quota, viewPosition } = req.body;
+  if (!validViewPosition(viewPosition)) return res.status(400).json({ message: "Invalid viewing zone" });
   if ((price !== undefined && (!Number.isFinite(Number(price)) || Number(price) < 0)) || (quota !== undefined && (!Number.isSafeInteger(Number(quota)) || Number(quota) < 1)) || (name !== undefined && (typeof name !== "string" || !name.trim()))) return res.status(400).json({ message: "Name, non-negative price and positive integer quota are required" });
 
   try {
@@ -108,6 +112,7 @@ export const updateTicketType = async (req, res) => {
     const updated = await prisma.ticketType.update({
       where: { id },
       data: {
+        ...(viewPosition !== undefined && { viewPosition: viewPosition || null }),
         ...(name !== undefined && { name }),
         ...(price !== undefined && { price }),
         ...(quota !== undefined && {

@@ -170,6 +170,8 @@ model Event {
 
   venueImageUrl   String?     @map("venue_image_url")
   venueImageId    String?     @map("venue_image_id")
+  previewVideoUrl String?     @map("preview_video_url")
+  previewVideoId  String?     @map("preview_video_id")
 
   startDatetime   DateTime    @map("start_datetime")
   endDatetime     DateTime    @map("end_datetime")
@@ -229,6 +231,7 @@ model TicketType {
 
   quota          Int
   availableQuota Int         @map("available_quota")
+  viewPosition   String?     @map("view_position")
 
   createdAt      DateTime    @default(now()) @map("created_at")
   updatedAt      DateTime    @updatedAt @map("updated_at")

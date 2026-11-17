@@ -1,3 +1,4 @@
+import { validPreviewVideo, validViewPosition } from "../utils/previewValidation.js";
 import prisma, { Prisma } from "../service/prisma.js";
 import CloudinaryService from "../service/cloudinaryService.js";
 import AuditLogService from "../service/auditLogService.js";
@@ -101,7 +102,7 @@ export const createEvent = async (req, res) => {
     let tiers = [];
     try { tiers = req.body.ticketTypes ? JSON.parse(req.body.ticketTypes) : []; }
     catch { return res.status(400).json({ message: "Invalid ticket types" }); }
-    if (!Array.isArray(tiers) || tiers.some(t => !t || typeof t.name !== "string" || !t.name.trim() || !Number.isFinite(t.price) || t.price < 0 || !Number.isSafeInteger(t.quota) || t.quota < 1)) return res.status(400).json({ message: "Invalid ticket type name, price or quota" });
+    if (!Array.isArray(tiers) || tiers.some(t => !t || typeof t.name !== "string" || !t.name.trim() || !Number.isFinite(t.price) || t.price < 0 || !Number.isSafeInteger(t.quota) || t.quota < 1 || !validViewPosition(t.viewPosition))) return res.status(400).json({ message: "Invalid ticket type name, price or quota" });
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: { organizerProfile: true },
@@ -119,6 +120,8 @@ export const createEvent = async (req, res) => {
       return res.status(403).json({ statusCode: 403, message: "Your organizer account has not been approved" });
     }
 
+    const previewVideo = files.previewVideo?.[0];
+    if (!validPreviewVideo(previewVideo)) return res.status(400).json({ message: "Preview must be an MP4 or WebM video up to 25 MB" });
     const coverImage = files.coverImage?.[0];
     const venueImage = files.venueImage?.[0];
 
@@ -165,6 +168,7 @@ export const createEvent = async (req, res) => {
       venueImage ? CloudinaryService.uploadImage(venueImage) : null,
     ]);
 
+    const previewUpload = previewVideo ? await CloudinaryService.uploadVideo(previewVideo) : null;
     let invitedUserIds = dto.invitedUserIds;
     if (typeof invitedUserIds === "string") {
       try {
@@ -217,11 +221,13 @@ export const createEvent = async (req, res) => {
           coverImageId: coverUpload.public_id,
           venueImageUrl: venueUpload?.secure_url,
           venueImageId: venueUpload?.public_id,
+          previewVideoUrl: previewUpload?.secure_url,
+          previewVideoId: previewUpload?.public_id,
           startDatetime,
           endDatetime,
           isRefundable,
           status: "DRAFT",
-          ticketTypes: { create: tiers.map(t => ({ name: t.name.trim(), price: t.price, quota: t.quota, availableQuota: t.quota })) },
+          ticketTypes: { create: tiers.map(t => ({ name: t.name.trim(), price: t.price, quota: t.quota, availableQuota: t.quota, viewPosition: t.viewPosition || null })) },
         },
       });
 
@@ -289,6 +295,8 @@ export const updateEvent = async (req, res) => {
       return res.status(400).json({ statusCode: 400, message: "End datetime must be after start datetime" });
     }
 
+    const previewVideo = files.previewVideo?.[0];
+    if (!validPreviewVideo(previewVideo)) return res.status(400).json({ message: "Preview must be an MP4 or WebM video up to 25 MB" });
     const coverImage = files.coverImage?.[0];
     const venueImage = files.venueImage?.[0];
     const images = [coverImage, venueImage].filter(Boolean);
@@ -304,6 +312,7 @@ export const updateEvent = async (req, res) => {
       }
     }
 
+    const previewUpload = previewVideo ? await CloudinaryService.uploadVideo(previewVideo) : null;
     let coverUpload;
     if (coverImage) coverUpload = await CloudinaryService.uploadImage(coverImage);
     let venueUpload;
@@ -324,6 +333,8 @@ export const updateEvent = async (req, res) => {
         ...(dto.startDatetime !== undefined && { startDatetime }),
         ...(dto.endDatetime !== undefined && { endDatetime }),
         ...(isRefundable !== undefined && { isRefundable }),
+        ...(previewUpload && { previewVideoUrl: previewUpload.secure_url, previewVideoId: previewUpload.public_id }),
+        ...(dto.removePreviewVideo === "true" && !previewUpload && { previewVideoUrl: null, previewVideoId: null }),
         ...(coverUpload && { coverImageUrl: coverUpload.secure_url, coverImageId: coverUpload.public_id }),
         ...(venueUpload && { venueImageUrl: venueUpload.secure_url, venueImageId: venueUpload.public_id }),
         ...(event.status === "REJECTED" && { rejectionReason: null }),

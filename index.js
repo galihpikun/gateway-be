@@ -83,7 +83,7 @@ app.use('/', rootRouter);
 // Global Error Handler
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
-  const status = err.status || err.statusCode || 500;
+  const status = err.code === "LIMIT_FILE_SIZE" ? 413 : err.status || err.statusCode || 500;
   const message = err.message || 'Internal server error';
   res.status(status).json({
     statusCode: status,

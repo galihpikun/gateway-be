@@ -36,7 +36,7 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
       return previousFetch(url, options);
     };
     PaymentService.createPaymentSession = async order => ({ paymentSessionId: `ps-${order.id}`, paymentUrl: 'https://example.invalid/test-checkout' });
-    CloudinaryService.uploadImage = async () => ({ public_id: 'test-only-image', secure_url: 'https://example.invalid/test.jpg' });
+    CloudinaryService.uploadImage = async (file, folder, resourceType) => ({ public_id: 'test-only-image', secure_url: resourceType === 'video' ? 'https://example.invalid/test.mp4' : 'https://example.invalid/test.jpg' });
     RefundService.createXenditRefund = async payload => {
       assert.match(payload.paymentId, /^py-/);
       assert.ok(payload.amount > 0);
@@ -67,11 +67,20 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     await request(`/organizer/admin/${profile.id}/approve`, admin, 'PATCH');
     assert.equal((await request('/auth/me', organizer)).data.organizerProfile.status, 'APPROVED');
     const eventForm = new FormData();
-    for (const [key, value] of Object.entries({ title: 'Workflow concert', description: 'Test fixture', categoryId: category.id, location: 'Test venue', startDatetime: new Date(Date.now() + 3 * 86400000).toISOString(), endDatetime: new Date(Date.now() + 4 * 86400000).toISOString(), isRefundable: 'true', ticketTypes: JSON.stringify([{ name: 'GA', price: 100000, quota: 10 }]) })) eventForm.set(key, value);
+    for (const [key, value] of Object.entries({ title: 'Workflow concert', description: 'Test fixture', categoryId: category.id, location: 'Test venue', startDatetime: new Date(Date.now() + 3 * 86400000).toISOString(), endDatetime: new Date(Date.now() + 4 * 86400000).toISOString(), isRefundable: 'true', ticketTypes: JSON.stringify([{ name: 'GA', price: 100000, quota: 10, viewPosition: 'FRONT' }]) })) eventForm.set(key, value);
     eventForm.set('coverImage', new Blob(['test'], { type: 'image/png' }), 'test.png');
+    eventForm.set('previewVideo', new Blob(['0000ftyp'], { type: 'video/mp4' }), 'preview.mp4');
     const created = await request('/events', organizer, 'POST', eventForm, 201);
     const eventId = created.event.id; eventIds.push(eventId);
     const tiers = await request(`/ticket-types/event/${eventId}`);
+    assert.equal(created.event.previewVideoUrl, 'https://example.invalid/test.mp4');
+    assert.equal(tiers[0].viewPosition, 'FRONT');
+    await request(`/ticket-types/${tiers[0].id}`, organizer, 'PUT', {viewPosition:'seat-42'},400);
+    await request(`/ticket-types/${tiers[0].id}`, buyer, 'PUT', {viewPosition:'REAR'},403);
+    assert.equal((await request(`/ticket-types/${tiers[0].id}`, organizer, 'PUT', {viewPosition:'BALCONY'})).viewPosition,'BALCONY');
+    const removePreview = new FormData();removePreview.set('removePreviewVideo','true');
+    await request(`/events/${eventId}`,organizer,'PATCH',removePreview);
+    assert.equal((await request(`/events/organizer/${eventId}`,organizer)).previewVideoUrl,null);
     assert.equal(tiers.length, 1, 'event and tiers must be created atomically');
     await request(`/events/${eventId}/submit`, organizer, 'PATCH');
     await request(`/events/admin/${eventId}/approve`, admin, 'PATCH');

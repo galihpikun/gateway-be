@@ -10,14 +10,15 @@ cloudinary.config({
 });
 
 export class CloudinaryService {
-  static async uploadImage(file, folder = "ticket-booking") {
+  static async uploadVideo(file) { return this.uploadImage(file, "ticket-booking/previews", "video"); }
+  static async uploadImage(file, folder = "ticket-booking", resourceType = "image") {
     if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) throw new Error("Cloudinary credentials are required");
 
     return new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
           folder,
-          resource_type: "image",
+          resource_type: resourceType,
         },
         (error, result) => {
           if (error) {
