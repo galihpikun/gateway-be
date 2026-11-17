@@ -430,8 +430,8 @@ export class RefundService {
     return { message: "Refund approved and queued for processing", refund: await prisma.refund.findUnique({ where: { id: refundId } }) };
   }
 
-  static async processQueuedRefunds() {
-    const jobs = await prisma.refund.findMany({ where: { status: { in: ["APPROVED", "PROCESSING"] } }, include: { order: true }, take: 20, orderBy: { updatedAt: "asc" } });
+  static async processQueuedRefunds(refundIds) {
+    const jobs = await prisma.refund.findMany({ where: { status: { in: ["APPROVED", "PROCESSING"] }, ...(refundIds ? { id: { in: refundIds } } : {}) }, include: { order: true }, take: 20, orderBy: { updatedAt: "asc" } });
     for (const job of jobs) {
       try {
         if (job.pgRefundId) {

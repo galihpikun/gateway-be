@@ -89,7 +89,7 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     assert.equal((await request(`/orders/${order.id}`, buyer)).refunds.length, 1);
     assert.equal((await request('/refunds/organizer', organizer)).data.length, 1);
     await request(`/refunds/admin/${refundId}/approve`, admin, 'PATCH');
-    await RefundService.processQueuedRefunds();
+    await RefundService.processQueuedRefunds((await prisma.refund.findMany({ where: { requestedById: buyer.id }, select: { id: true } })).map(row => row.id));
     assert.equal((await prisma.refund.findUnique({ where: { id: refundId } })).status, 'SUCCEEDED');
     assert.equal((await prisma.ticketType.findUnique({ where: { id: tiers[0].id } })).availableQuota, 10);
     await request('/refunds/webhook', null, 'POST', { event: 'refund.succeeded', data: { id: `rfd-${(await prisma.refund.findUnique({ where: { id: refundId } })).idempotencyKey}` } });
@@ -98,7 +98,7 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     await request(`/events/admin/${eventId}/cancel`, admin, 'PATCH', { reason: 'Venue closed' });
     const cancellation = await prisma.refund.findFirst({ where: { orderId: order.id, type: 'EVENT_CANCELLATION' } });
     assert.equal(Number(cancellation.amount), 10000);
-    await RefundService.processQueuedRefunds();
+    await RefundService.processQueuedRefunds((await prisma.refund.findMany({ where: { requestedById: buyer.id }, select: { id: true } })).map(row => row.id));
     assert.equal((await prisma.ticketType.findUnique({ where: { id: tiers[0].id } })).availableQuota, 10);
     await request('/auth/forgot-password', null, 'POST', { email: buyer.email });
     assert.ok(otp);
@@ -130,7 +130,7 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     await request('/payments/webhook', null, 'POST', { event: 'payment_session.completed', data: { reference_id: late.orderNumber, payment_id: `py-${late.id}`, amount: 100000 } });
     assert.equal((await prisma.order.findUnique({ where: { id: late.id } })).paymentStatus, 'PAID');
     assert.equal((await prisma.refund.findFirst({ where: { orderId: late.id } })).status, 'APPROVED');
-    await RefundService.processQueuedRefunds();
+    await RefundService.processQueuedRefunds((await prisma.refund.findMany({ where: { requestedById: buyer.id }, select: { id: true } })).map(row => row.id));
     assert.equal((await prisma.refund.findFirst({ where: { orderId: late.id } })).status, 'SUCCEEDED');
     assert.equal((await prisma.ticketType.findUnique({ where: { id: tiers[0].id } })).availableQuota, 10);
   } finally {
