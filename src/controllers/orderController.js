@@ -110,6 +110,10 @@ export const createOrder = async (req, res) => {
       return res.status(400).json({ statusCode: 400, message: "Order must contain items" });
     }
 
+    if (dto.items.some((item) => !item || typeof item.ticketTypeId !== "string" || !Number.isSafeInteger(item.quantity) || item.quantity < 1)) {
+      return res.status(400).json({ statusCode: 400, message: "Each ticket quantity must be a positive integer" });
+    }
+
     const fingerprint = computeFingerprint(dto);
 
     if (dto.idempotencyKey) {

@@ -429,7 +429,7 @@ export const verifyForgotPassword = async (req, res) => {
 };
 
 export const resetPassword = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, code } = req.body;
 
   try {
     const user = await prisma.user.findUnique({
@@ -468,6 +468,10 @@ export const resetPassword = async (req, res) => {
         statusCode: 401,
         message: "Verification session has expired, please request a new OTP",
       });
+    }
+
+    if (!code || !password || !(await bcrypt.compare(String(code), otp.code))) {
+      return res.status(401).json({ statusCode: 401, message: "Invalid verification code" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -522,6 +526,7 @@ export const getMe = async (req, res) => {
         role: true,
         emailVerified: true,
         isSuspended: true,
+        organizerProfile: { select: { status: true } },
         createdAt: true,
       },
     });
@@ -545,6 +550,7 @@ export const getMe = async (req, res) => {
         role: user.role,
         emailVerified: user.emailVerified,
         isSuspended: user.isSuspended,
+        organizerProfile: user.organizerProfile,
         createdAt: user.createdAt,
       },
     });
