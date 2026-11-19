@@ -3,6 +3,13 @@ const layoutZones = {
   THEATER: [...floorZones, "BALCONY"],
   ARENA: [...floorZones, "BALCONY"],
   OUTDOOR: floorZones,
+  INDONESIA_ARENA: [...floorZones, "BALCONY"],
+  ISTORA: floorZones,
+  JIS: [...floorZones, "BALCONY"],
+  STADION_MADYA: floorZones,
+  ICE_BSD: floorZones,
+  JIEXPO_THEATRE: [...floorZones, "BALCONY"],
+  JIEXPO_HALL: floorZones,
 };
 
 export const isVenueLayout = value => typeof value === "string" && Object.hasOwn(layoutZones, value);

@@ -85,11 +85,11 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     eventForm.set('coverImage', new Blob(['test'], { type: 'image/png' }), 'test.png');
     eventForm.set('previewVideo', new Blob(['0000ftyp'], { type: 'video/mp4' }), 'preview.mp4');
     await request('/events', organizer, 'POST', eventForm, 400);
-    eventForm.set('venueLayout', 'ARENA');
+    eventForm.set('venueLayout', 'INDONESIA_ARENA');
     await request('/events', organizer, 'POST', eventForm, 400);
     eventForm.set('ticketBackground', new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: 'image/png' }), 'pass.png');
     const created = await request('/events', organizer, 'POST', eventForm, 201);
-    assert.equal(created.event.venueLayout, 'ARENA');
+    assert.equal(created.event.venueLayout, 'INDONESIA_ARENA');
     assert.equal(created.event.ticketBackgroundUrl, 'https://example.invalid/test.jpg');
     const eventId = created.event.id; eventIds.push(eventId);
     const tiers = await request(`/ticket-types/event/${eventId}`);
@@ -104,7 +104,7 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     assert.equal(tiers.length, 1, 'event and tiers must be created atomically');
     await request(`/events/${eventId}/submit`, organizer, 'PATCH', undefined, 409);
     const outdoor = new FormData();
-    outdoor.set('venueLayout', 'OUTDOOR');
+    outdoor.set('venueLayout', 'ICE_BSD');
     outdoor.set('previewVideo', new Blob(['0000ftyp'], { type: 'video/mp4' }), 'preview.mp4');
     await request(`/events/${eventId}`, organizer, 'PATCH', outdoor);
     await request(`/events/${eventId}/submit`, organizer, 'PATCH', undefined, 409);
@@ -118,6 +118,12 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     const checkout = { items: [{ ticketTypeId: tiers[0].id, quantity: 2 }], buyer: contact, idempotencyKey: suffix };
     for (const restricted of [organizer, staff, admin]) {
       await request('/orders', restricted, 'POST', checkout, 403);
+    }
+    await prisma.organizerProfile.update({ where: { userId: organizer.id }, data: { status: 'REJECTED' } });
+    try {
+      await request('/orders', organizer, 'POST', checkout, 403);
+    } finally {
+      await prisma.organizerProfile.update({ where: { userId: organizer.id }, data: { status: 'APPROVED' } });
     }
     await request('/orders', buyer, 'POST', { ...checkout, buyer: undefined }, 400);
     await request('/orders', buyer, 'POST', { ...checkout, buyer: { ...contact, identityNumber: '1' } }, 400);
@@ -160,7 +166,7 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     assert.ok((await prisma.orderBuyerContact.findUnique({ where: { orderId: order.id } })).emailSentAt);
     assert.equal(tickets[0].orderItem.ticketType.event.ticketBackgroundUrl, 'https://example.invalid/test.jpg');
     const published = await request(`/events/${eventId}`);
-    assert.equal(published.venueLayout, 'OUTDOOR');
+    assert.equal(published.venueLayout, 'ICE_BSD');
     assert.equal(published.ticketTypes[0].viewPosition, 'REAR');
     await request('/ticket-redemption/redeem', staff, 'POST', { ticketCode: tickets[0].ticketCode, eventId: randomUUID() }, 409);
     const requested = await request('/refunds', buyer, 'POST', { orderId: order.id, reason: 'Cannot attend' }, 201);

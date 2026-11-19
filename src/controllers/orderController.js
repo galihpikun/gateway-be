@@ -144,6 +144,9 @@ export const createOrder = async (req, res) => {
       });
 
       if (existing) {
+        if (existing.orderItems.some(({ ticketType }) => ticketType.event.organizerId === userId)) {
+          return res.status(403).json({ message: "Only regular customer accounts can buy tickets." });
+        }
         if (existing.requestFingerprint !== fingerprint) {
           return res.status(409).json({
             statusCode: 409,
