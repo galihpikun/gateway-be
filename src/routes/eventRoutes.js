@@ -52,6 +52,7 @@ router.post(
     { name: "coverImage", maxCount: 1 },
     { name: "venueImage", maxCount: 1 },
     { name: "previewVideo", maxCount: 1 },
+    { name: "ticketBackground", maxCount: 1 },
   ]),
   createEvent
 );
@@ -67,6 +68,7 @@ router.patch(
     { name: "coverImage", maxCount: 1 },
     { name: "venueImage", maxCount: 1 },
     { name: "previewVideo", maxCount: 1 },
+    { name: "ticketBackground", maxCount: 1 },
   ]),
   updateEvent
 );

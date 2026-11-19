@@ -1,4 +1,5 @@
-import { validPreviewVideo, validViewPosition } from "../utils/previewValidation.js";
+import { validPreviewVideo, validTicketBackground, validViewPosition } from "../utils/previewValidation.js";
+import { isVenueLayout, isLayoutZone, eventReviewIssue } from "../utils/venueLayout.js";
 import prisma, { Prisma } from "../service/prisma.js";
 import CloudinaryService from "../service/cloudinaryService.js";
 import AuditLogService from "../service/auditLogService.js";
@@ -103,6 +104,12 @@ export const createEvent = async (req, res) => {
     try { tiers = req.body.ticketTypes ? JSON.parse(req.body.ticketTypes) : []; }
     catch { return res.status(400).json({ message: "Invalid ticket types" }); }
     if (!Array.isArray(tiers) || tiers.some(t => !t || typeof t.name !== "string" || !t.name.trim() || !Number.isFinite(t.price) || t.price < 0 || !Number.isSafeInteger(t.quota) || t.quota < 1 || !validViewPosition(t.viewPosition))) return res.status(400).json({ message: "Invalid ticket type name, price or quota" });
+    if (!isVenueLayout(dto.venueLayout)) {
+      return res.status(400).json({ message: "Choose a venue layout." });
+    }
+    if (!tiers.length || tiers.some(tier => !isLayoutZone(dto.venueLayout, tier.viewPosition))) {
+      return res.status(400).json({ message: "Add at least one ticket type and assign each pass a zone in the chosen layout." });
+    }
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: { organizerProfile: true },
@@ -124,12 +131,20 @@ export const createEvent = async (req, res) => {
     if (!validPreviewVideo(previewVideo)) return res.status(400).json({ message: "Preview must be an MP4 or WebM video up to 25 MB" });
     const coverImage = files.coverImage?.[0];
     const venueImage = files.venueImage?.[0];
+    const ticketBackground = files.ticketBackground?.[0];
+    if (!validTicketBackground(ticketBackground)) {
+      return res.status(400).json({ message: "Choose a JPG, PNG, or WebP ticket background up to 5 MB." });
+    }
+
+    if (!previewVideo || !ticketBackground) {
+      return res.status(400).json({ message: "Upload a concert preview video and a ticket background image." });
+    }
 
     if (!coverImage) {
       return res.status(400).json({ statusCode: 400, message: "Cover image is required" });
     }
 
-    const images = [coverImage, venueImage].filter(Boolean);
+    const images = [coverImage, venueImage, ticketBackground].filter(Boolean);
     const allowedExtensions = [".jpg", ".jpeg", ".png", ".webp"];
 
     for (const file of images) {
@@ -163,12 +178,6 @@ export const createEvent = async (req, res) => {
       return res.status(404).json({ statusCode: 404, message: "Category not found" });
     }
 
-    const [coverUpload, venueUpload] = await Promise.all([
-      CloudinaryService.uploadImage(coverImage),
-      venueImage ? CloudinaryService.uploadImage(venueImage) : null,
-    ]);
-
-    const previewUpload = previewVideo ? await CloudinaryService.uploadVideo(previewVideo) : null;
     let invitedUserIds = dto.invitedUserIds;
     if (typeof invitedUserIds === "string") {
       try {
@@ -209,6 +218,13 @@ export const createEvent = async (req, res) => {
     const isRefundable =
       dto.isRefundable === undefined || dto.isRefundable === true || dto.isRefundable === "true";
 
+    const [coverUpload, venueUpload, previewUpload, ticketBackgroundUpload] = await Promise.all([
+      CloudinaryService.uploadImage(coverImage),
+      venueImage ? CloudinaryService.uploadImage(venueImage) : null,
+      CloudinaryService.uploadVideo(previewVideo),
+      CloudinaryService.uploadImage(ticketBackground),
+    ]);
+
     const event = await prisma.$transaction(async (tx) => {
       const created = await tx.event.create({
         data: {
@@ -221,8 +237,11 @@ export const createEvent = async (req, res) => {
           coverImageId: coverUpload.public_id,
           venueImageUrl: venueUpload?.secure_url,
           venueImageId: venueUpload?.public_id,
-          previewVideoUrl: previewUpload?.secure_url,
-          previewVideoId: previewUpload?.public_id,
+          previewVideoUrl: previewUpload.secure_url,
+          previewVideoId: previewUpload.public_id,
+          venueLayout: dto.venueLayout,
+          ticketBackgroundUrl: ticketBackgroundUpload.secure_url,
+          ticketBackgroundId: ticketBackgroundUpload.public_id,
           startDatetime,
           endDatetime,
           isRefundable,
@@ -276,6 +295,10 @@ export const updateEvent = async (req, res) => {
       return res.status(409).json({ statusCode: 409, message: "Only draft or rejected events can be updated" });
     }
 
+    if (dto.venueLayout !== undefined && !isVenueLayout(dto.venueLayout)) {
+      return res.status(400).json({ message: "Choose a venue layout." });
+    }
+
     if (dto.categoryId) {
       const category = await prisma.category.findUnique({
         where: { id: dto.categoryId },
@@ -299,7 +322,11 @@ export const updateEvent = async (req, res) => {
     if (!validPreviewVideo(previewVideo)) return res.status(400).json({ message: "Preview must be an MP4 or WebM video up to 25 MB" });
     const coverImage = files.coverImage?.[0];
     const venueImage = files.venueImage?.[0];
-    const images = [coverImage, venueImage].filter(Boolean);
+    const ticketBackground = files.ticketBackground?.[0];
+    if (!validTicketBackground(ticketBackground)) {
+      return res.status(400).json({ message: "Choose a JPG, PNG, or WebP ticket background up to 5 MB." });
+    }
+    const images = [coverImage, venueImage, ticketBackground].filter(Boolean);
     const allowedExtensions = [".jpg", ".jpeg", ".png", ".webp"];
 
     for (const file of images) {
@@ -317,6 +344,7 @@ export const updateEvent = async (req, res) => {
     if (coverImage) coverUpload = await CloudinaryService.uploadImage(coverImage);
     let venueUpload;
     if (venueImage) venueUpload = await CloudinaryService.uploadImage(venueImage);
+    const ticketBackgroundUpload = ticketBackground ? await CloudinaryService.uploadImage(ticketBackground) : null;
 
     const isRefundable =
       dto.isRefundable !== undefined
@@ -324,7 +352,7 @@ export const updateEvent = async (req, res) => {
         : undefined;
 
     const updatedEvent = await prisma.event.update({
-      where: { id: eventId },
+      where: { id: eventId, status: event.status },
       data: {
         ...(dto.title !== undefined && { title: dto.title }),
         ...(dto.description !== undefined && { description: dto.description }),
@@ -333,6 +361,11 @@ export const updateEvent = async (req, res) => {
         ...(dto.startDatetime !== undefined && { startDatetime }),
         ...(dto.endDatetime !== undefined && { endDatetime }),
         ...(isRefundable !== undefined && { isRefundable }),
+        ...(dto.venueLayout !== undefined && { venueLayout: dto.venueLayout }),
+        ...(ticketBackgroundUpload && {
+          ticketBackgroundUrl: ticketBackgroundUpload.secure_url,
+          ticketBackgroundId: ticketBackgroundUpload.public_id,
+        }),
         ...(previewUpload && { previewVideoUrl: previewUpload.secure_url, previewVideoId: previewUpload.public_id }),
         ...(dto.removePreviewVideo === "true" && !previewUpload && { previewVideoUrl: null, previewVideoId: null }),
         ...(coverUpload && { coverImageUrl: coverUpload.secure_url, coverImageId: coverUpload.public_id }),
@@ -346,6 +379,7 @@ export const updateEvent = async (req, res) => {
       event: updatedEvent,
     });
   } catch (error) {
+    if (error.code === "P2025") return res.status(409).json({ message: "The event status changed. Reload it and try again." });
     console.error("Update event error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }
@@ -358,6 +392,7 @@ export const submitEvent = async (req, res) => {
   try {
     const event = await prisma.event.findUnique({
       where: { id: eventId },
+      include: { ticketTypes: true },
     });
 
     if (!event) {
@@ -372,8 +407,11 @@ export const submitEvent = async (req, res) => {
       return res.status(409).json({ statusCode: 409, message: "Only draft or rejected events can be submitted" });
     }
 
+    const issue = eventReviewIssue(event);
+    if (issue) return res.status(409).json({ message: issue });
+
     const updatedEvent = await prisma.event.update({
-      where: { id: eventId },
+      where: { id: eventId, status: event.status, updatedAt: event.updatedAt },
       data: {
         status: "PENDING_REVIEW",
         rejectionReason: null,
@@ -385,6 +423,7 @@ export const submitEvent = async (req, res) => {
       event: updatedEvent,
     });
   } catch (error) {
+    if (error.code === "P2025") return res.status(409).json({ message: "The event changed. Reload it and try again." });
     console.error("Submit event error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }
@@ -558,9 +597,8 @@ export const approveEvent = async (req, res) => {
         throw { statusCode: 409, message: "Organizer is not approved" };
       }
 
-      if (event.ticketTypes.length === 0) {
-        throw { statusCode: 409, message: "EVent Must atleast have one ticket type before approval" };
-      }
+      const issue = eventReviewIssue(event);
+      if (issue) throw { statusCode: 409, message: issue };
 
       const published = await tx.event.updateMany({
         where: { id: eventId, status: "PENDING_REVIEW" },

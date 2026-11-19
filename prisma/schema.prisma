@@ -172,6 +172,9 @@ model Event {
   venueImageId    String?     @map("venue_image_id")
   previewVideoUrl String?     @map("preview_video_url")
   previewVideoId  String?     @map("preview_video_id")
+  venueLayout     String?     @map("venue_layout")
+  ticketBackgroundUrl String? @map("ticket_background_url")
+  ticketBackgroundId  String? @map("ticket_background_id")
 
   startDatetime   DateTime    @map("start_datetime")
   endDatetime     DateTime    @map("end_datetime")

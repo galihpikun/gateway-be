@@ -1,5 +1,6 @@
 import { validViewPosition } from "../utils/previewValidation.js";
 import prisma from "../service/prisma.js";
+import { isLayoutZone } from "../utils/venueLayout.js";
 
 export const getTicketTypes = async (req, res) => {
   const { eventId } = req.params;
@@ -56,6 +57,9 @@ export const createTicketType = async (req, res) => {
     }
 
     if (!["DRAFT", "REJECTED"].includes(event.status)) return res.status(409).json({ message: "Ticket tiers may only change on draft or rejected events" });
+    if (event.venueLayout && !isLayoutZone(event.venueLayout, viewPosition)) {
+      return res.status(400).json({ message: "This zone is unavailable in the chosen layout." });
+    }
     if (!name || price === undefined || quota === undefined) return res.status(400).json({ message: "Name, price and quota are required" });
     const ticketType = await prisma.ticketType.create({
       data: {
@@ -97,6 +101,9 @@ export const updateTicketType = async (req, res) => {
     }
 
     if (!["DRAFT", "REJECTED"].includes(ticketType.event.status)) return res.status(409).json({ message: "Ticket tiers may only change on draft or rejected events" });
+    if (viewPosition !== undefined && ticketType.event.venueLayout && !isLayoutZone(ticketType.event.venueLayout, viewPosition)) {
+      return res.status(400).json({ message: "This zone is unavailable in the chosen layout." });
+    }
     const soldQuota = ticketType.quota - ticketType.availableQuota;
 
     if (quota !== undefined && Number(quota) < soldQuota) {
