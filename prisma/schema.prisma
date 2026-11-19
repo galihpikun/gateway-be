@@ -263,10 +263,28 @@ model Order {
   // Relations
   user            User          @relation(fields: [userId], references: [id], onDelete: Restrict)
   orderItems      OrderItem[]
+  buyerContact    OrderBuyerContact?
   refunds         Refund[]
 
   @@unique([userId, idempotencyKey])
   @@map("orders")
+}
+
+model OrderBuyerContact {
+  orderId           String    @id @map("order_id")
+  fullName          String    @map("full_name")
+  email             String
+  phone             String
+  identityType      String    @map("identity_type")
+  identityLastFour  String    @map("identity_last_four")
+  language          String    @default("id")
+  nextEmailAttempt  DateTime? @map("next_email_attempt")
+  emailSentAt       DateTime? @map("email_sent_at")
+  emailAttempts     Int       @default(0) @map("email_attempts")
+  order             Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([nextEmailAttempt])
+  @@map("order_buyer_contacts")
 }
 
 model OrderItem {

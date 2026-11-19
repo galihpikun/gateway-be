@@ -40,8 +40,7 @@ export class PaymentService {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Xendit payment session error", { status: response.status, body: errorText });
+      console.error("Xendit payment session error", { status: response.status });
       throw { statusCode: 400, message: "Failed to create Xendit payment session" };
     }
 
@@ -123,7 +122,13 @@ export class PaymentService {
         // A previously released reservation must not be returned again by refund finalization.
         if (current.paymentStatus === "PENDING") for (const item of items) await tx.ticketType.update({ where: { id: item.ticketTypeId }, data: { availableQuota: { increment: item.quantity } } });
         await tx.refund.upsert({ where: { order_event_refund_unique: { orderId: order.id, eventId, type: "EVENT_CANCELLATION" } }, create: { orderId: order.id, eventId, requestedById: order.userId, type: "EVENT_CANCELLATION", status: "APPROVED", originalAmount: order.totalAmount, amount: order.totalAmount, reason: "Payment received after event cancellation or inventory expiry", idempotencyKey: randomUUID(), approvedAt: new Date() }, update: {} });
-      } else await IssuedTicketService.issueTicketsForOrder(order.id, tx);
+      } else {
+        await IssuedTicketService.issueTicketsForOrder(order.id, tx);
+        await tx.orderBuyerContact.updateMany({
+          where: { orderId: order.id },
+          data: { nextEmailAttempt: new Date() },
+        });
+      }
     });
     return { message: "Payment completed and reconciled" };
   }

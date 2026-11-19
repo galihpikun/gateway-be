@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import prisma, { Prisma } from "../service/prisma.js";
 import PaymentService from "../service/paymentService.js";
+import { parseBuyerContact } from "../utils/buyerContact.js";
 import { buildPaginatedResponse } from "../utils/paginate.js";
 
 function generateOrderNumber(date) {
@@ -9,12 +10,12 @@ function generateOrderNumber(date) {
   return `ORD-${datePart}-${randomPart}`;
 }
 
-function computeFingerprint(dto) {
+function computeFingerprint(dto, buyer) {
   const normalized = dto.items
     .map((item) => `${item.ticketTypeId}:${item.quantity}`)
     .sort()
     .join("|");
-  return createHash("sha256").update(normalized).digest("hex");
+  return createHash("sha256").update(JSON.stringify([normalized, buyer])).digest("hex");
 }
 
 async function expireOrder(orderId) {
@@ -95,15 +96,20 @@ async function cancelFailedPaymentOrder(orderId) {
 
 export const createOrder = async (req, res) => {
   const userId = req.user?.userId || req.user?.id;
-  const dto = req.body;
+  const dto = req.body || {};
 
   try {
     const user = await prisma.user.findUnique({
       where: { id: userId },
+      select: { id: true, role: true, organizerProfile: { select: { status: true } } },
     });
 
     if (!user) {
       return res.status(404).json({ statusCode: 404, message: "User not found" });
+    }
+
+    if (user.role !== "USER" || user.organizerProfile?.status === "APPROVED") {
+      return res.status(403).json({ message: "Only regular customer accounts can buy tickets." });
     }
 
     if (!dto.items || !Array.isArray(dto.items) || dto.items.length === 0) {
@@ -114,7 +120,9 @@ export const createOrder = async (req, res) => {
       return res.status(400).json({ statusCode: 400, message: "Each ticket quantity must be a positive integer" });
     }
 
-    const fingerprint = computeFingerprint(dto);
+    const buyer = parseBuyerContact(dto.buyer);
+    if (!buyer.contact) return res.status(400).json({ message: buyer.error });
+    const fingerprint = computeFingerprint(dto, buyer.contact);
 
     if (dto.idempotencyKey) {
       const existing = await prisma.order.findUnique({
@@ -199,6 +207,10 @@ export const createOrder = async (req, res) => {
           throw { statusCode: 400, message: "All ticket types must belong to the same event" };
         }
 
+        if (ticketType.event.organizerId === userId) {
+          throw { statusCode: 403, message: "Only regular customer accounts can buy tickets." };
+        }
+
         if (ticketType.event.status !== "PUBLISHED") {
           throw { statusCode: 409, message: "Event is not available for ticket sales" };
         }
@@ -252,6 +264,7 @@ export const createOrder = async (req, res) => {
           expiresAt,
           idempotencyKey: dto.idempotencyKey ?? null,
           requestFingerprint: dto.idempotencyKey ? fingerprint : null,
+          buyerContact: { create: buyer.contact },
           orderItems: {
             create: orderItemsData,
           },
@@ -270,7 +283,7 @@ export const createOrder = async (req, res) => {
 
     let paymentSession;
     try {
-      paymentSession = await PaymentService.createPaymentSession(order, user);
+      paymentSession = await PaymentService.createPaymentSession(order, { id: user.id, email: buyer.contact.email, fullName: buyer.contact.fullName });
     } catch {
       await cancelFailedPaymentOrder(order.id);
       return res.status(400).json({ statusCode: 400, message: "Failed to create payment session" });

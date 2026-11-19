@@ -8,6 +8,7 @@ import { generateToken } from '../src/utils/generateToken.js';
 import PaymentService from '../src/service/paymentService.js';
 import RefundService from '../src/service/refundService.js';
 import CloudinaryService from '../src/service/cloudinaryService.js';
+import { processQueuedTicketEmails } from '../src/service/ticketEmailService.js';
 
 test('HTTP workflow: organizer review, atomic event, staff, payment, refund, recovery and late payment', async () => {
   const suffix = randomUUID();
@@ -23,19 +24,32 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
   await new Promise(resolve => server.once('listening', resolve));
   const base = `http://127.0.0.1:${server.address().port}/api`;
   let category, otp;
+  let mailAvailable = false;
+  const ticketEmails = [];
+  const contact = { fullName: 'Demo Buyer', email: 'delivery@example.invalid', phone: '+6281212345678', identityType: 'KTP', identityNumber: '3201010101011234', language: 'id' };
   try {
     process.env.XENDIT_WEBHOOK_TOKEN = 'workflow-test';
     process.env.RESEND_API_KEY = 'test-only-key';
     process.env.RESEND_FROM_EMAIL = 'test@example.invalid';
     globalThis.fetch = async (url, options) => {
       if (url === 'https://api.resend.com/emails') {
-        otp = JSON.parse(options.body).text.match(/\b\d{6}\b/)[0];
+        const message = JSON.parse(options.body);
+        if (message.attachments) {
+          ticketEmails.push({ message, key: options.headers['Idempotency-Key'] });
+          if (!mailAvailable) return new Response(null, { status: 503 });
+        } else {
+          otp = message.text.match(/\b\d{6}\b/)[0];
+        }
         return new Response(JSON.stringify({ id: 'test-mail' }), { status: 200 });
       }
       if (String(url).startsWith('https://')) throw new Error('Unexpected external network call in integration test');
       return previousFetch(url, options);
     };
-    PaymentService.createPaymentSession = async order => ({ paymentSessionId: `ps-${order.id}`, paymentUrl: 'https://example.invalid/test-checkout' });
+    PaymentService.createPaymentSession = async (order, customer) => {
+      assert.equal(customer.email, contact.email);
+      assert.equal(customer.fullName, contact.fullName);
+      return { paymentSessionId: `ps-${order.id}`, paymentUrl: 'https://example.invalid/test-checkout' };
+    };
     CloudinaryService.uploadImage = async (file, folder, resourceType) => ({ public_id: 'test-only-image', secure_url: resourceType === 'video' ? 'https://example.invalid/test.mp4' : 'https://example.invalid/test.jpg' });
     RefundService.createXenditRefund = async payload => {
       assert.match(payload.paymentId, /^py-/);
@@ -101,11 +115,49 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     await request(`/events/organizer/${eventId}/staff`, organizer, 'POST', { userId: staff.id });
     assert.equal((await request('/staff/events', staff)).length, 1);
     await request('/orders', buyer, 'POST', { items: [{ ticketTypeId: tiers[0].id, quantity: -1 }] }, 400);
-    const order = (await request('/orders', buyer, 'POST', { items: [{ ticketTypeId: tiers[0].id, quantity: 2 }], idempotencyKey: suffix }, 201)).order;
+    const checkout = { items: [{ ticketTypeId: tiers[0].id, quantity: 2 }], buyer: contact, idempotencyKey: suffix };
+    for (const restricted of [organizer, staff, admin]) {
+      await request('/orders', restricted, 'POST', checkout, 403);
+    }
+    await request('/orders', buyer, 'POST', { ...checkout, buyer: undefined }, 400);
+    await request('/orders', buyer, 'POST', { ...checkout, buyer: { ...contact, identityNumber: '1' } }, 400);
+    const order = (await request('/orders', buyer, 'POST', checkout, 201)).order;
     orderIds.push(order.id);
-    await request('/payments/webhook', null, 'POST', { event: 'payment_session.completed', data: { reference_id: order.orderNumber, payment_session_id: `ps-${order.id}`, payment_id: `py-${order.id}`, amount: 200000 } });
+    assert.equal((await request('/orders', buyer, 'POST', checkout)).order.id, order.id);
+    await request('/orders', buyer, 'POST', { ...checkout, buyer: { ...contact, email: 'other@example.invalid' } }, 409);
+    assert.equal(order.buyerContact, undefined);
+    const savedBuyer = await prisma.orderBuyerContact.findUnique({ where: { orderId: order.id } });
+    assert.equal(savedBuyer.identityLastFour, '1234');
+    assert.ok(!JSON.stringify(savedBuyer).includes(contact.identityNumber));
+    await processQueuedTicketEmails(order.id);
+    assert.equal(ticketEmails.length, 0, 'no email before payment');
+    const completed = { event: 'payment_session.completed', data: { reference_id: order.orderNumber, payment_session_id: `ps-${order.id}`, payment_id: `py-${order.id}`, amount: 200000 } };
+    await request('/payments/webhook', null, 'POST', completed);
     const tickets = await request('/issued-tickets/my', buyer);
     assert.equal(tickets.length, 2);
+    await processQueuedTicketEmails(order.id);
+    const deferred = await prisma.orderBuyerContact.findUnique({ where: { orderId: order.id } });
+    assert.equal(deferred.emailSentAt, null);
+    assert.equal(deferred.emailAttempts, 1);
+    assert.ok(deferred.nextEmailAttempt > new Date());
+    await prisma.orderBuyerContact.update({ where: { orderId: order.id }, data: { nextEmailAttempt: new Date() } });
+    mailAvailable = true;
+    await processQueuedTicketEmails(order.id);
+    await request('/payments/webhook', null, 'POST', completed);
+    await processQueuedTicketEmails(order.id);
+    assert.equal(ticketEmails.length, 2, 'one failed send and one successful retry');
+    assert.equal(ticketEmails[0].key, ticketEmails[1].key);
+    const { message } = ticketEmails[1];
+    assert.deepEqual(message.to, [contact.email]);
+    assert.equal(message.attachments.length, tickets.length);
+    for (const ticket of tickets) {
+      const qr = message.attachments.find(image => image.filename === ticket.ticketCode + '.png');
+      assert.ok(qr);
+      assert.equal(Buffer.from(qr.content, 'base64').subarray(1, 4).toString(), 'PNG');
+      assert.ok(message.html.includes('cid:' + qr.content_id));
+    }
+    assert.ok(!JSON.stringify(message).includes(contact.identityNumber));
+    assert.ok((await prisma.orderBuyerContact.findUnique({ where: { orderId: order.id } })).emailSentAt);
     assert.equal(tickets[0].orderItem.ticketType.event.ticketBackgroundUrl, 'https://example.invalid/test.jpg');
     const published = await request(`/events/${eventId}`);
     assert.equal(published.venueLayout, 'OUTDOOR');
@@ -136,14 +188,17 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     const active = await prisma.event.create({ data: { organizerId: organizer.id, categoryId: category.id, title: "Active gate test", description: "Test", location: "Test", coverImageUrl: "https://example.invalid/test.jpg", coverImageId: "test", startDatetime: new Date(Date.now() - 3600000), endDatetime: new Date(Date.now() + 3600000), status: "PUBLISHED", ticketTypes: { create: { name: "GA", price: 100000, quota: 5, availableQuota: 5 } } }, include: { ticketTypes: true } });
     eventIds.push(active.id);
     await request(`/events/organizer/${active.id}/staff`, organizer, "POST", { userId: staff.id });
-    const liveOrder = (await request("/orders", buyer, "POST", { items: [{ ticketTypeId: active.ticketTypes[0].id, quantity: 1 }] }, 201)).order;
+    const liveOrder = (await request("/orders", buyer, "POST", { items: [{ ticketTypeId: active.ticketTypes[0].id, quantity: 1 }], buyer: contact }, 201)).order;
     orderIds.push(liveOrder.id);
     await request("/payments/webhook", null, "POST", { event: "payment_session.completed", data: { reference_id: liveOrder.orderNumber, payment_id: `py-${liveOrder.id}`, amount: 100000 } });
     const liveTicket = (await request("/issued-tickets/my", buyer)).find(t => t.orderItem.order.id === liveOrder.id);
-    const redemption = await request("/ticket-redemption/redeem", staff, "POST", { ticketCode: liveTicket.ticketCode, eventId: active.id });
+    await processQueuedTicketEmails(liveOrder.id);
+    const emailedCode = ticketEmails.at(-1).message.attachments[0].filename.replace(/\.png$/, '');
+    assert.equal(emailedCode, liveTicket.ticketCode);
+    const redemption = await request("/ticket-redemption/redeem", staff, "POST", { ticketCode: emailedCode, eventId: active.id });
     assert.equal(redemption.ticket.ticketType.name, "GA");
     await request("/ticket-redemption/redeem", staff, "POST", { ticketCode: liveTicket.ticketCode, eventId: active.id }, 409);
-    const expiredOrder = (await request("/orders", buyer, "POST", { items: [{ ticketTypeId: active.ticketTypes[0].id, quantity: 1 }] }, 201)).order;
+    const expiredOrder = (await request("/orders", buyer, "POST", { items: [{ ticketTypeId: active.ticketTypes[0].id, quantity: 1 }], buyer: contact }, 201)).order;
     orderIds.push(expiredOrder.id);
     await prisma.order.update({ where: { id: expiredOrder.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
     assert.equal((await request(`/orders/${expiredOrder.id}`, buyer)).paymentStatus, "EXPIRED");

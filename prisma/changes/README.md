@@ -20,3 +20,13 @@ a compatible zone on every pass. Existing drafts and rejected events must supply
 information before review. For an older event already pending review, reject it with instructions
 to complete its setup before resubmission. OUTDOOR has no BALCONY zone. The optional venue
 image remains available for the organizer's official plan.
+
+# Checkout contacts and ticket email
+
+Apply `npx prisma db execute --file prisma/changes/20261119_checkout_contact.sql` and
+`npx prisma generate` before starting the new API. Existing orders remain usable. New orders
+save their own contact details and only the last four characters of the submitted identity number.
+After payment is confirmed and usable tickets are issued, the API queues an email to the checkout
+address using the existing RESEND_API_KEY and RESEND_FROM_EMAIL. Delivery failures are retried
+independently of payment or ticket issuance. Existing orders without checkout contact data are
+not backfilled.

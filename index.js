@@ -22,6 +22,7 @@ import { fileURLToPath } from 'url';
 import { expirePendingOrders } from './src/controllers/orderController.js';
 import RefundService from './src/service/refundService.js';
 import PaymentService from './src/service/paymentService.js';
+import { processQueuedTicketEmails } from './src/service/ticketEmailService.js';
 
 dotenv.config();
 
@@ -94,6 +95,20 @@ app.use((err, req, res, next) => {
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain && process.env.NODE_ENV !== 'test') {
+  let ticketMailRunning = false;
+  const deliverTicketMail = async () => {
+    if (ticketMailRunning) return;
+    ticketMailRunning = true;
+    try {
+      await processQueuedTicketEmails();
+    } catch (error) {
+      console.error("Ticket email queue failed:", error.code || error.name);
+    } finally {
+      ticketMailRunning = false;
+    }
+  };
+  setInterval(deliverTicketMail, 5000).unref();
+  void deliverTicketMail();
   let maintenanceRunning = false;
   const maintain = async () => {
     if (maintenanceRunning) return;
