@@ -194,6 +194,8 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     assert.equal((await request('/orders/' + order.id, buyer)).canRequestRefund, true);
     const requested = await request('/refunds', buyer, 'POST', { orderId: order.id, reason: 'Cannot attend' }, 201);
     const refundId = requested.refunds[0].id;
+    const lockedTickets = await request('/issued-tickets/my', buyer);
+    assert.ok(lockedTickets.length > 0 && lockedTickets.every(ticket => ticket.refundLocked === true));
     assert.equal((await request('/orders/' + order.id, buyer)).canRequestRefund, false);
     assert.equal((await request(`/orders/${order.id}`, buyer)).refunds.length, 1);
     assert.equal((await request('/refunds/organizer', organizer)).data.length, 1);
@@ -226,8 +228,15 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     await processQueuedTicketEmails(liveOrder.id);
     const emailedCode = ticketEmails.at(-1).message.attachments[0].filename.replace(/\.png$/, '');
     assert.equal(emailedCode, liveTicket.ticketCode);
+    const stale = await prisma.refund.create({ data: {
+      orderId: liveOrder.id, eventId: active.id, requestedById: buyer.id, originalAmount: 100000, amount: 95000,
+      status: "PENDING_APPROVAL", reason: "qa_r2_gate_request",
+    } });
     const redemption = await request("/ticket-redemption/redeem", staff, "POST", { ticketCode: emailedCode, eventId: active.id });
     assert.equal(redemption.ticket.ticketType.name, "GA");
+    const rejected = await prisma.refund.findUniqueOrThrow({ where: { id: stale.id } });
+    assert.equal(rejected.status, "REJECTED");
+    assert.match(rejected.adminReason, /event already started/i);
     await request("/ticket-redemption/redeem", staff, "POST", { ticketCode: liveTicket.ticketCode, eventId: active.id }, 409);
     const expiredOrder = (await request("/orders", buyer, "POST", { items: [{ ticketTypeId: active.ticketTypes[0].id, quantity: 1 }], buyer: contact }, 201)).order;
     orderIds.push(expiredOrder.id);

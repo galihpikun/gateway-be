@@ -1,3 +1,4 @@
+import { gateRefundStatuses, refundBlocksGate } from "../service/refundService.js";
 import prisma, { Prisma } from "../service/prisma.js";
 
 export const lookupTicket = async (req, res) => {
@@ -128,8 +129,6 @@ export const redeemTicket = async (req, res) => {
       await tx.$queryRaw(Prisma.sql`SELECT id FROM events WHERE id = ${ticketEvent.id} FOR UPDATE`);
       const event = await tx.event.findUnique({ where: { id: ticketEvent.id } });
       if (!eventId || eventId !== event.id) throw { statusCode: 409, message: "Ticket belongs to another event" };
-      const activeRefund = await tx.refund.findFirst({ where: { orderId: ticket.orderItem.orderId, eventId, status: { in: ["PENDING_APPROVAL", "APPROVED", "PROCESSING"] } } });
-      if (activeRefund) throw { statusCode: 409, message: "Ticket is locked while a refund is pending" };
 
       const staffAssignment = await tx.eventStaff.findUnique({
         where: {
@@ -163,6 +162,16 @@ export const redeemTicket = async (req, res) => {
 
       if (ticket.isRedeemed) {
         throw { statusCode: 409, message: "Ticket has already been redeemed" };
+      }
+
+      const refundScope = { orderId: ticket.orderItem.orderId, eventId };
+      await tx.refund.updateMany({
+        where: { ...refundScope, type: "CUSTOMER_REQUEST", status: "PENDING_APPROVAL" },
+        data: { status: "REJECTED", rejectedAt: now, adminReason: "Event already started before refund approval." },
+      });
+      const refunds = await tx.refund.findMany({ where: { ...refundScope, status: { in: gateRefundStatuses } } });
+      if (refunds.some(refund => refundBlocksGate(refund, event, now))) {
+        throw { statusCode: 409, message: "Ticket is locked by a refund" };
       }
 
       const redeemed = await tx.issuedTicket.updateMany({

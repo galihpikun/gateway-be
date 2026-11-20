@@ -6,6 +6,13 @@ import { buildPaginatedResponse } from "../utils/paginate.js";
 export const CUSTOMER_REFUND_DEDUCTION_RATE = 0.05;
 export const REFUND_CALENDAR_TIMEZONE = "Asia/Jakarta";
 
+export const gateRefundStatuses = ["PENDING_APPROVAL", "APPROVED", "PROCESSING", "SUCCEEDED"];
+
+export function refundBlocksGate(refund, event, now) {
+  return gateRefundStatuses.includes(refund.status) && !(refund.type === "CUSTOMER_REQUEST"
+    && refund.status === "PENDING_APPROVAL" && now >= event.startDatetime);
+}
+
 export class RefundService {
   static getEventCalendarDateString(date) {
     return new Intl.DateTimeFormat("en-CA", {

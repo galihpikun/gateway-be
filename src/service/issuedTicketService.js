@@ -1,6 +1,24 @@
+import { gateRefundStatuses, refundBlocksGate } from "./refundService.js";
 import { randomBytes } from "crypto";
 import prisma from "./prisma.js";
 import { buildPaginatedResponse } from "../utils/paginate.js";
+
+async function withRefundLocks(tickets) {
+  if (!tickets.length) return tickets;
+  const orderIds = [...new Set(tickets.map(ticket => ticket.orderItem.orderId))];
+  const refunds = await prisma.refund.findMany({
+    where: { orderId: { in: orderIds }, status: { in: gateRefundStatuses } },
+    select: { orderId: true, eventId: true, type: true, status: true },
+  });
+  const byOrder = Map.groupBy(refunds, refund => refund.orderId);
+  const now = new Date();
+  return tickets.map(ticket => {
+    const { event } = ticket.orderItem.ticketType;
+    const refundLocked = (byOrder.get(ticket.orderItem.orderId) ?? [])
+      .some(refund => refund.eventId === event.id && refundBlocksGate(refund, event, now));
+    return { ...ticket, refundLocked };
+  });
+}
 
 export class IssuedTicketService {
   static generateTicketCode() {
@@ -77,7 +95,7 @@ export class IssuedTicketService {
   }
 
   static async getMyTickets(userId) {
-    return prisma.issuedTicket.findMany({
+    const tickets = await prisma.issuedTicket.findMany({
       where: {
         orderItem: {
           order: {
@@ -108,6 +126,7 @@ export class IssuedTicketService {
         createdAt: "desc",
       },
     });
+    return withRefundLocks(tickets);
   }
 
   static async getTicketDetail(userId, ticketId) {
@@ -135,7 +154,8 @@ export class IssuedTicketService {
       throw { statusCode: 403, message: "You do not have access to this ticket" };
     }
 
-    return ticket;
+    const [result] = await withRefundLocks([ticket]);
+    return result;
   }
 
   static async getAdminTickets(query) {
