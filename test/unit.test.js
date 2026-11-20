@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
+import { createHash } from 'node:crypto';
 
 process.env.NODE_ENV = 'test';
 
@@ -8,6 +9,8 @@ import { buildPaginatedResponse } from '../src/utils/paginate.js';
 import { generateToken } from '../src/utils/generateToken.js';
 import { requireRoles } from '../src/middlewares/roleMiddleware.js';
 import { RefundService, CUSTOMER_REFUND_DEDUCTION_RATE } from '../src/service/refundService.js';
+import { parseBuyerContact } from '../src/utils/buyerContact.js';
+import { createOrder } from '../src/controllers/orderController.js';
 import { register, login } from '../src/controllers/authController.js';
 import prisma from '../src/service/prisma.js';
 import app from '../index.js';
@@ -187,5 +190,43 @@ test('generateToken fails closed when JWT signing configuration is missing or bl
   } finally {
     if (original === undefined) delete process.env.JWT_SECRET;
     else process.env.JWT_SECRET = original;
+  }
+});
+
+test('an idempotent checkout retry returns the order committed by the first request', async () => {
+  const buyer = {
+    fullName: 'QA contact', email: 'qa_test_buyer@example.invalid', phone: '08123456789',
+    identityType: 'STUDENT_CARD', identityNumber: 'QA1234', language: 'id',
+  };
+  const contact = parseBuyerContact(buyer).contact;
+  const order = {
+    id: 'qa_test_order', paymentStatus: 'PENDING', paymentUrl: 'https://example.invalid/payment',
+    requestFingerprint: createHash('sha256').update(JSON.stringify(['qa_test_tier:1', contact])).digest('hex'),
+    orderItems: [{ ticketType: { event: { organizerId: 'qa_test_other' } } }],
+  };
+  const findUser = prisma.user.findUnique;
+  const findOrder = prisma.order.findUnique;
+  const transaction = prisma.$transaction;
+  let lookups = 0;
+  let status;
+  let payload;
+  try {
+    prisma.user.findUnique = async () => ({ id: 'qa_test_buyer', role: 'USER' });
+    prisma.order.findUnique = async () => (++lookups === 1 ? null : order);
+    prisma.$transaction = async () => { throw Object.assign(new Error('Simulated unique order key conflict'), { code: 'P2002' }); };
+    await createOrder({
+      user: { id: 'qa_test_buyer' },
+      body: { buyer, idempotencyKey: 'qa_test_retry', items: [{ ticketTypeId: 'qa_test_tier', quantity: 1 }] },
+    }, {
+      status(code) { status = code; return this; },
+      json(body) { payload = body; },
+    });
+    assert.equal(status, 200);
+    assert.equal(payload.order.id, order.id);
+    assert.equal(payload.paymentUrl, order.paymentUrl);
+  } finally {
+    prisma.user.findUnique = findUser;
+    prisma.order.findUnique = findOrder;
+    prisma.$transaction = transaction;
   }
 });

@@ -95,9 +95,33 @@ async function cancelFailedPaymentOrder(orderId) {
   });
 }
 
+function findOrderByKey(userId, idempotencyKey) {
+  return prisma.order.findUnique({
+    where: { userId_idempotencyKey: { userId, idempotencyKey } },
+    include: { orderItems: { include: { ticketType: { include: { event: true } } } } },
+  });
+}
+
+function respondToOrderReplay(res, order, userId, fingerprint) {
+  if (order.orderItems.some(({ ticketType }) => ticketType.event.organizerId === userId)) {
+    return res.status(403).json({ message: "Only regular customer accounts can buy tickets." });
+  }
+  if (order.requestFingerprint !== fingerprint) {
+    return res.status(409).json({ statusCode: 409, message: "Idempotency key already used with a different request" });
+  }
+  if (order.paymentStatus === "FAILED" || order.paymentStatus === "EXPIRED") {
+    return res.status(409).json({
+      statusCode: 409,
+      message: "Previous order with this idempotency key has failed or expired. Use a new idempotency key.",
+    });
+  }
+  return res.status(200).json({ message: "Order created successfully", order, paymentUrl: order.paymentUrl });
+}
+
 export const createOrder = async (req, res) => {
   const userId = req.user?.userId || req.user?.id;
   const dto = req.body || {};
+  let fingerprint;
 
   try {
     const user = await prisma.user.findUnique({
@@ -123,51 +147,11 @@ export const createOrder = async (req, res) => {
 
     const buyer = parseBuyerContact(dto.buyer);
     if (!buyer.contact) return res.status(400).json({ message: buyer.error });
-    const fingerprint = computeFingerprint(dto, buyer.contact);
+    fingerprint = computeFingerprint(dto, buyer.contact);
 
     if (dto.idempotencyKey) {
-      const existing = await prisma.order.findUnique({
-        where: {
-          userId_idempotencyKey: {
-            userId,
-            idempotencyKey: dto.idempotencyKey,
-          },
-        },
-        include: {
-          orderItems: {
-            include: {
-              ticketType: {
-                include: { event: true },
-              },
-            },
-          },
-        },
-      });
-
-      if (existing) {
-        if (existing.orderItems.some(({ ticketType }) => ticketType.event.organizerId === userId)) {
-          return res.status(403).json({ message: "Only regular customer accounts can buy tickets." });
-        }
-        if (existing.requestFingerprint !== fingerprint) {
-          return res.status(409).json({
-            statusCode: 409,
-            message: "Idempotency key already used with a different request",
-          });
-        }
-
-        if (existing.paymentStatus === "FAILED" || existing.paymentStatus === "EXPIRED") {
-          return res.status(409).json({
-            statusCode: 409,
-            message: "Previous order with this idempotency key has failed or expired. Use a new idempotency key.",
-          });
-        }
-
-        return res.status(200).json({
-          message: "Order created successfully",
-          order: existing,
-          paymentUrl: existing.paymentUrl,
-        });
-      }
+      const existing = await findOrderByKey(userId, dto.idempotencyKey);
+      if (existing) return respondToOrderReplay(res, existing, userId, fingerprint);
     }
 
     const ticketTypeIds = dto.items.map((item) => item.ticketTypeId);
@@ -321,6 +305,11 @@ export const createOrder = async (req, res) => {
       return res.status(400).json({ statusCode: 400, message: "Failed to save payment session" });
     }
   } catch (error) {
+    if (error.code === "P2002" && dto.idempotencyKey && fingerprint) {
+      const existing = await findOrderByKey(userId, dto.idempotencyKey);
+      if (existing) return respondToOrderReplay(res, existing, userId, fingerprint);
+    }
+
     const statusCode = error.statusCode || 500;
     return res.status(statusCode).json({ statusCode, message: error.message });
   }
