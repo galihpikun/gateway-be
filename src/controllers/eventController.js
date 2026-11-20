@@ -1,3 +1,4 @@
+import { withEventLock } from "../utils/eventLock.js";
 import { validPreviewVideo, validTicketBackground, validViewPosition } from "../utils/previewValidation.js";
 import { isVenueLayout, isLayoutZone, eventReviewIssue } from "../utils/venueLayout.js";
 import prisma, { Prisma } from "../service/prisma.js";
@@ -351,27 +352,33 @@ export const updateEvent = async (req, res) => {
         ? dto.isRefundable === true || dto.isRefundable === "true"
         : undefined;
 
-    const updatedEvent = await prisma.event.update({
-      where: { id: eventId, status: event.status },
-      data: {
-        ...(dto.title !== undefined && { title: dto.title }),
-        ...(dto.description !== undefined && { description: dto.description }),
-        ...(dto.location !== undefined && { location: dto.location }),
-        ...(dto.categoryId !== undefined && { categoryId: dto.categoryId }),
-        ...(dto.startDatetime !== undefined && { startDatetime }),
-        ...(dto.endDatetime !== undefined && { endDatetime }),
-        ...(isRefundable !== undefined && { isRefundable }),
-        ...(dto.venueLayout !== undefined && { venueLayout: dto.venueLayout }),
-        ...(ticketBackgroundUpload && {
-          ticketBackgroundUrl: ticketBackgroundUpload.secure_url,
-          ticketBackgroundId: ticketBackgroundUpload.public_id,
-        }),
-        ...(previewUpload && { previewVideoUrl: previewUpload.secure_url, previewVideoId: previewUpload.public_id }),
-        ...(dto.removePreviewVideo === "true" && !previewUpload && { previewVideoUrl: null, previewVideoId: null }),
-        ...(coverUpload && { coverImageUrl: coverUpload.secure_url, coverImageId: coverUpload.public_id }),
-        ...(venueUpload && { venueImageUrl: venueUpload.secure_url, venueImageId: venueUpload.public_id }),
-        ...(event.status === "REJECTED" && { rejectionReason: null }),
-      },
+    const updatedEvent = await withEventLock(eventId, async tx => {
+      const current = await tx.event.findUnique({ where: { id: eventId } });
+      if (!current || current.status !== event.status || current.updatedAt.getTime() !== event.updatedAt.getTime()) {
+        throw { statusCode: 409, message: "The event changed. Reload it and try again." };
+      }
+      return tx.event.update({
+        where: { id: eventId, status: event.status },
+        data: {
+          ...(dto.title !== undefined && { title: dto.title }),
+          ...(dto.description !== undefined && { description: dto.description }),
+          ...(dto.location !== undefined && { location: dto.location }),
+          ...(dto.categoryId !== undefined && { categoryId: dto.categoryId }),
+          ...(dto.startDatetime !== undefined && { startDatetime }),
+          ...(dto.endDatetime !== undefined && { endDatetime }),
+          ...(isRefundable !== undefined && { isRefundable }),
+          ...(dto.venueLayout !== undefined && { venueLayout: dto.venueLayout }),
+          ...(ticketBackgroundUpload && {
+            ticketBackgroundUrl: ticketBackgroundUpload.secure_url,
+            ticketBackgroundId: ticketBackgroundUpload.public_id,
+          }),
+          ...(previewUpload && { previewVideoUrl: previewUpload.secure_url, previewVideoId: previewUpload.public_id }),
+          ...(dto.removePreviewVideo === "true" && !previewUpload && { previewVideoUrl: null, previewVideoId: null }),
+          ...(coverUpload && { coverImageUrl: coverUpload.secure_url, coverImageId: coverUpload.public_id }),
+          ...(venueUpload && { venueImageUrl: venueUpload.secure_url, venueImageId: venueUpload.public_id }),
+          ...(event.status === "REJECTED" && { rejectionReason: null }),
+        },
+      });
     });
 
     return res.status(200).json({
@@ -379,6 +386,7 @@ export const updateEvent = async (req, res) => {
       event: updatedEvent,
     });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
     if (error.code === "P2025") return res.status(409).json({ message: "The event status changed. Reload it and try again." });
     console.error("Update event error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
@@ -390,42 +398,23 @@ export const submitEvent = async (req, res) => {
   const eventId = req.params.id;
 
   try {
-    const event = await prisma.event.findUnique({
-      where: { id: eventId },
-      include: { ticketTypes: true },
+    const updatedEvent = await withEventLock(eventId, async tx => {
+      const event = await tx.event.findUnique({ where: { id: eventId }, include: { ticketTypes: true } });
+      if (!event) throw { statusCode: 404, message: "Event not found" };
+      if (event.organizerId !== userId) throw { statusCode: 403, message: "You are not the owner of this event" };
+      if (!["DRAFT", "REJECTED"].includes(event.status)) {
+        throw { statusCode: 409, message: "Only draft or rejected events can be submitted" };
+      }
+      const issue = eventReviewIssue(event);
+      if (issue) throw { statusCode: 409, message: issue };
+
+      return tx.event.update({ where: { id: eventId }, data: { status: "PENDING_REVIEW", rejectionReason: null } });
     });
-
-    if (!event) {
-      return res.status(404).json({ statusCode: 404, message: "Event not found" });
-    }
-
-    if (event.organizerId !== userId) {
-      return res.status(403).json({ statusCode: 403, message: "You are not the owner of this event" });
-    }
-
-    if (event.status !== "DRAFT" && event.status !== "REJECTED") {
-      return res.status(409).json({ statusCode: 409, message: "Only draft or rejected events can be submitted" });
-    }
-
-    const issue = eventReviewIssue(event);
-    if (issue) return res.status(409).json({ message: issue });
-
-    const updatedEvent = await prisma.event.update({
-      where: { id: eventId, status: event.status, updatedAt: event.updatedAt },
-      data: {
-        status: "PENDING_REVIEW",
-        rejectionReason: null,
-      },
-    });
-
-    return res.status(200).json({
-      message: "Event submitted for review",
-      event: updatedEvent,
-    });
+    return res.status(200).json({ message: "Event submitted for review", event: updatedEvent });
   } catch (error) {
-    if (error.code === "P2025") return res.status(409).json({ message: "The event changed. Reload it and try again." });
-    console.error("Submit event error:", error);
-    return res.status(500).json({ statusCode: 500, message: error.message });
+    const statusCode = error.statusCode || 500;
+    if (statusCode === 500) console.error("Submit event error:", error);
+    return res.status(statusCode).json({ statusCode, message: error.message });
   }
 };
 
@@ -572,7 +561,7 @@ export const approveEvent = async (req, res) => {
   const actorId = req.user?.userId || req.user?.id;
 
   try {
-    const updatedEvent = await prisma.$transaction(async (tx) => {
+    const updatedEvent = await withEventLock(eventId, async tx => {
       const event = await tx.event.findUnique({
         where: { id: eventId },
         include: {
@@ -689,19 +678,12 @@ export const rejectEvent = async (req, res) => {
   }
 
   try {
-    const event = await prisma.event.findUnique({
-      where: { id: eventId },
-    });
-
-    if (!event) {
-      return res.status(404).json({ statusCode: 404, message: "Event not found" });
-    }
-
-    if (event.status !== "PENDING_REVIEW") {
-      return res.status(409).json({ statusCode: 409, message: "Only events pending review can be rejected" });
-    }
-
-    const updatedEvent = await prisma.$transaction(async (tx) => {
+    const updatedEvent = await withEventLock(eventId, async tx => {
+      const event = await tx.event.findUnique({ where: { id: eventId } });
+      if (!event) throw { statusCode: 404, message: "Event not found" };
+      if (event.status !== "PENDING_REVIEW") {
+        throw { statusCode: 409, message: "Only events pending review can be rejected" };
+      }
       const updated = await tx.event.update({
         where: { id: eventId },
         data: {
@@ -743,6 +725,7 @@ export const rejectEvent = async (req, res) => {
       event: updatedEvent,
     });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ statusCode: error.statusCode, message: error.message });
     console.error("Reject event error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }
