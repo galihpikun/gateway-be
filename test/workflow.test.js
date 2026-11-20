@@ -190,7 +190,7 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     await request('/auth/forgot-password', null, 'POST', { email: buyer.email });
     assert.ok(otp);
     await request('/auth/verify-forgot-password', null, 'POST', { email: buyer.email, code: otp });
-    await request('/auth/reset-password', null, 'POST', { email: buyer.email, code: '000000', password: 'NewPass123!' }, 401);
+    await request('/auth/reset-password', null, 'POST', { email: buyer.email, code: '000000', password: 'NewPass123!' }, 400);
     await request('/auth/reset-password', null, 'POST', { email: buyer.email, code: otp, password: 'NewPass123!' });
     await request('/auth/login', null, 'POST', { email: buyer.email, password: 'NewPass123!' });
     const active = await prisma.event.create({ data: { organizerId: organizer.id, categoryId: category.id, title: "Active gate test", description: "Test", location: "Test", coverImageUrl: "https://example.invalid/test.jpg", coverImageId: "test", startDatetime: new Date(Date.now() - 3600000), endDatetime: new Date(Date.now() + 3600000), status: "PUBLISHED", ticketTypes: { create: { name: "GA", price: 100000, quota: 5, availableQuota: 5 } } }, include: { ticketTypes: true } });
