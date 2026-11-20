@@ -169,8 +169,10 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     assert.equal(published.venueLayout, 'ICE_BSD');
     assert.equal(published.ticketTypes[0].viewPosition, 'REAR');
     await request('/ticket-redemption/redeem', staff, 'POST', { ticketCode: tickets[0].ticketCode, eventId: randomUUID() }, 409);
+    assert.equal((await request('/orders/' + order.id, buyer)).canRequestRefund, true);
     const requested = await request('/refunds', buyer, 'POST', { orderId: order.id, reason: 'Cannot attend' }, 201);
     const refundId = requested.refunds[0].id;
+    assert.equal((await request('/orders/' + order.id, buyer)).canRequestRefund, false);
     assert.equal((await request(`/orders/${order.id}`, buyer)).refunds.length, 1);
     assert.equal((await request('/refunds/organizer', organizer)).data.length, 1);
     await request(`/refunds/admin/${refundId}/approve`, admin, 'PATCH');
@@ -197,6 +199,7 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     const liveOrder = (await request("/orders", buyer, "POST", { items: [{ ticketTypeId: active.ticketTypes[0].id, quantity: 1 }], buyer: contact }, 201)).order;
     orderIds.push(liveOrder.id);
     await request("/payments/webhook", null, "POST", { event: "payment_session.completed", data: { reference_id: liveOrder.orderNumber, payment_id: `py-${liveOrder.id}`, amount: 100000 } });
+    assert.equal((await request('/orders/' + liveOrder.id, buyer)).canRequestRefund, false);
     const liveTicket = (await request("/issued-tickets/my", buyer)).find(t => t.orderItem.order.id === liveOrder.id);
     await processQueuedTicketEmails(liveOrder.id);
     const emailedCode = ticketEmails.at(-1).message.attachments[0].filename.replace(/\.png$/, '');

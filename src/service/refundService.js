@@ -16,6 +16,26 @@ export class RefundService {
     }).format(date);
   }
 
+  static isBeforeCustomerRefundCutoff(now, startDatetime) {
+    return this.getEventCalendarDateString(now) < this.getEventCalendarDateString(startDatetime);
+  }
+
+  static async getOrderRefundEligibility(order, now = new Date()) {
+    if (order.paymentStatus !== "PAID" || order.refunds.length || !order.orderItems.length) return false;
+    const totals = new Map();
+    for (const item of order.orderItems) {
+      const event = item.ticketType.event;
+      if (!event.isRefundable || event.status === "CANCELLED" || !this.isBeforeCustomerRefundCutoff(now, event.startDatetime)) return false;
+      const subtotal = new Prisma.Decimal(item.price).mul(item.quantity);
+      totals.set(event.id, (totals.get(event.id) ?? new Prisma.Decimal(0)).add(subtotal));
+    }
+    if ([...totals.values()].some(total => total.lessThanOrEqualTo(0))) return false;
+    const unavailable = await prisma.issuedTicket.count({
+      where: { orderItem: { orderId: order.id }, OR: [{ isRedeemed: true }, { isRefunded: true }] },
+    });
+    return unavailable === 0;
+  }
+
   static calculateCustomerRefund(eligiblePaidAmount) {
     const original = new Prisma.Decimal(eligiblePaidAmount);
     if (original.lessThanOrEqualTo(0)) {
@@ -133,7 +153,6 @@ export class RefundService {
     }
 
     const now = new Date();
-    const todayCalendarStr = this.getEventCalendarDateString(now);
     const createdRefunds = [];
 
     await prisma.$transaction(async (tx) => {
@@ -155,8 +174,7 @@ export class RefundService {
           };
         }
 
-        const eventStartCalendarStr = this.getEventCalendarDateString(event.startDatetime);
-        if (todayCalendarStr >= eventStartCalendarStr) {
+        if (!this.isBeforeCustomerRefundCutoff(now, event.startDatetime)) {
           throw {
             statusCode: 400,
             message: `Refund requests for "${event.title}" must be submitted before the event's calendar date`,

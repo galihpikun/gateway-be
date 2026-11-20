@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import prisma, { Prisma } from "../service/prisma.js";
 import PaymentService from "../service/paymentService.js";
+import { RefundService } from "../service/refundService.js";
 import { parseBuyerContact } from "../utils/buyerContact.js";
 import { buildPaginatedResponse } from "../utils/paginate.js";
 
@@ -422,7 +423,8 @@ export const getOrderDetail = async (req, res) => {
       if (refreshed) order = refreshed;
     }
 
-    return res.status(200).json(order);
+    const canRequestRefund = await RefundService.getOrderRefundEligibility(order);
+    return res.status(200).json({ ...order, canRequestRefund });
   } catch (error) {
     console.error("Get order detail error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
