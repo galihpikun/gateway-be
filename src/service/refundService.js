@@ -147,6 +147,10 @@ export class RefundService {
       throw { statusCode: 400, message: "Only paid orders can be refunded" };
     }
 
+    if (order.totalAmount.isZero()) {
+      throw { statusCode: 400, message: "Free orders have no refundable amount" };
+    }
+
     if (!order.orderItems || order.orderItems.length === 0) {
       throw { statusCode: 400, message: "Order does not have any items" };
     }
@@ -459,6 +463,10 @@ export class RefundService {
     const jobs = await prisma.refund.findMany({ where: { status: { in: ["APPROVED", "PROCESSING"] }, ...(refundIds ? { id: { in: refundIds } } : {}) }, include: { order: true }, take: 20, orderBy: { updatedAt: "asc" } });
     for (const job of jobs) {
       try {
+        if (job.amount.isZero()) {
+          await this.finalizeRefundSucceeded(job, null);
+          continue;
+        }
         if (job.pgRefundId) {
           const modern = job.order.pgTransactionId?.startsWith("py-");
           const response = await fetch(`https://api.xendit.co/${modern ? "v3/" : ""}refunds/${encodeURIComponent(job.pgRefundId)}`, { headers: { Authorization: `Basic ${Buffer.from(`${process.env.XENDIT_SECRET_KEY}:`).toString("base64")}`, ...(modern && { "api-version": "2024-11-11" }) }, signal: AbortSignal.timeout(10000) });
@@ -739,6 +747,13 @@ export class RefundService {
 
     for (const [orderId, items] of itemsByOrder.entries()) {
       const order = items[0].order;
+      if (order.totalAmount.isZero()) {
+        await client.issuedTicket.updateMany({
+          where: { isCancelled: false, orderItem: { orderId, ticketType: { eventId } } },
+          data: { isCancelled: true },
+        });
+        continue;
+      }
 
       const existing = await client.refund.findFirst({
         where: {

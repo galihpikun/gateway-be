@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "crypto";
 import prisma, { Prisma } from "../service/prisma.js";
+import IssuedTicketService from "../service/issuedTicketService.js";
 import PaymentService from "../service/paymentService.js";
 import { RefundService } from "../service/refundService.js";
 import { parseBuyerContact } from "../utils/buyerContact.js";
@@ -243,16 +244,18 @@ export const createOrder = async (req, res) => {
         };
       });
 
-      return tx.order.create({
+      const free = totalAmount.isZero();
+      const created = await tx.order.create({
         data: {
           orderNumber,
           userId,
           totalAmount,
-          paymentStatus: "PENDING",
+          paymentStatus: free ? "PAID" : "PENDING",
+          ...(free && { paymentMethod: "FREE", paymentUrl: null }),
           expiresAt,
           idempotencyKey: dto.idempotencyKey ?? null,
           requestFingerprint: dto.idempotencyKey ? fingerprint : null,
-          buyerContact: { create: buyer.contact },
+          buyerContact: { create: { ...buyer.contact, ...(free && { nextEmailAttempt: new Date() }) } },
           orderItems: {
             create: orderItemsData,
           },
@@ -267,7 +270,13 @@ export const createOrder = async (req, res) => {
           },
         },
       });
+      if (free) await IssuedTicketService.issueTicketsForOrder(created.id, tx);
+      return created;
     });
+
+    if (order.paymentMethod === "FREE") {
+      return res.status(201).json({ message: "Order created successfully", order, paymentUrl: null });
+    }
 
     let paymentSession;
     try {

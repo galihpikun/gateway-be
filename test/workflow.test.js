@@ -255,6 +255,27 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     await RefundService.processQueuedRefunds((await prisma.refund.findMany({ where: { requestedById: buyer.id }, select: { id: true } })).map(row => row.id));
     assert.equal((await prisma.refund.findFirst({ where: { orderId: late.id } })).status, 'SUCCEEDED');
     assert.equal((await prisma.ticketType.findUnique({ where: { id: tiers[0].id } })).availableQuota, 10);
+    const freeEvent = await prisma.event.create({ data: {
+      organizerId: organizer.id, categoryId: category.id, title: "qa_r2_free", description: "Free fixture", location: "Test",
+      coverImageUrl: "https://example.invalid/qa_r2_free.jpg", coverImageId: "qa_r2_free",
+      startDatetime: new Date(Date.now() + 86400000), endDatetime: new Date(Date.now() + 90000000), status: "PUBLISHED",
+      ticketTypes: { create: { name: "qa_r2_free_tier", price: 0, quota: 1, availableQuota: 1 } },
+    }, include: { ticketTypes: true } });
+    eventIds.push(freeEvent.id);
+    let freeProviderCalls = 0;
+    PaymentService.createPaymentSession = async () => { freeProviderCalls++; throw new Error("Free orders must bypass provider"); };
+    const free = await request("/orders", buyer, "POST", { items: [{ ticketTypeId: freeEvent.ticketTypes[0].id, quantity: 1 }], buyer: contact, idempotencyKey: "qa_r2_free_order" }, 201);
+    orderIds.push(free.order.id);
+    assert.equal(free.order.paymentStatus, "PAID");
+    assert.equal(free.order.paymentMethod, "FREE");
+    assert.equal(free.paymentUrl, null);
+    assert.equal(freeProviderCalls, 0);
+    assert.equal(await prisma.issuedTicket.count({ where: { orderItem: { orderId: free.order.id } } }), 1);
+    assert.ok((await prisma.orderBuyerContact.findUniqueOrThrow({ where: { orderId: free.order.id } })).nextEmailAttempt);
+    await request("/refunds", buyer, "POST", { orderId: free.order.id, reason: "qa_r2_free_refund" }, 400);
+    await request("/events/admin/" + freeEvent.id + "/cancel", admin, "PATCH", { reason: "qa_r2_free_cancel" });
+    assert.equal(await prisma.refund.count({ where: { orderId: free.order.id } }), 0);
+    assert.equal(await prisma.issuedTicket.count({ where: { orderItem: { orderId: free.order.id }, isCancelled: true } }), 1);
   } finally {
     PaymentService.createPaymentSession = previousPayment;
     CloudinaryService.uploadImage = previousCloud;
