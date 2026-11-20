@@ -61,14 +61,17 @@ export class PaymentService {
     if (!process.env.XENDIT_SECRET_KEY) return;
     const orders = await prisma.order.findMany({ where: { paymentStatus: { in: ["PENDING", "EXPIRED", "FAILED"] }, pgTransactionId: { startsWith: "ps-" } }, orderBy: { updatedAt: "asc" }, take: 20 });
     for (const order of orders) {
-      await prisma.order.updateMany({ where: { id: order.id, paymentStatus: { not: "PAID" } }, data: { updatedAt: new Date() } });
-      const response = await fetch(`https://api.xendit.co/sessions/${encodeURIComponent(order.pgTransactionId)}`, { headers: { Authorization: `Basic ${Buffer.from(`${process.env.XENDIT_SECRET_KEY}:`).toString("base64")}` }, signal: AbortSignal.timeout(10000) });
-      if (!response.ok) continue;
-      const session = await response.json();
-      if (session.status === "COMPLETED") await this.handlePaymentCompleted({ data: { ...session, metadata: { orderId: order.id } } });
-      else if (session.status === "EXPIRED" && order.paymentStatus === "PENDING") await this.handlePaymentExpired({ data: { metadata: { orderId: order.id } } });
-      // Rotate unresolved rows so one batch cannot starve other sessions.
-      await prisma.order.updateMany({ where: { id: order.id, paymentStatus: { not: "PAID" } }, data: { updatedAt: new Date() } });
+      try {
+        // Rotate even when the provider is unavailable so other orders continue to get checked.
+        await prisma.order.updateMany({ where: { id: order.id, paymentStatus: { not: "PAID" } }, data: { updatedAt: new Date() } });
+        const response = await fetch(`https://api.xendit.co/sessions/${encodeURIComponent(order.pgTransactionId)}`, { headers: { Authorization: `Basic ${Buffer.from(`${process.env.XENDIT_SECRET_KEY}:`).toString("base64")}` }, signal: AbortSignal.timeout(10000) });
+        if (!response.ok) continue;
+        const session = await response.json();
+        if (session.status === "COMPLETED") await this.handlePaymentCompleted({ data: { ...session, metadata: { orderId: order.id } } });
+        else if (session.status === "EXPIRED" && order.paymentStatus === "PENDING") await this.handlePaymentExpired({ data: { metadata: { orderId: order.id } } });
+      } catch (error) {
+        console.warn("Payment reconciliation will retry:", order.id, error.code || error.name || "Error");
+      }
     }
   }
 
