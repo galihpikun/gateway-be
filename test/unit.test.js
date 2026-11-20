@@ -175,3 +175,17 @@ test('Direct register without OTP creates verified user and allows immediate log
     where: { email: testEmail },
   });
 });
+
+test('generateToken fails closed when JWT signing configuration is missing or blank', () => {
+  const original = process.env.JWT_SECRET;
+  const account = { id: 'qa_test_auth', email: 'qa_test_auth@example.invalid', role: 'USER' };
+  try {
+    delete process.env.JWT_SECRET;
+    assert.throws(() => generateToken(account), /JWT_SECRET must be configured/);
+    process.env.JWT_SECRET = '   ';
+    assert.throws(() => generateToken(account), /JWT_SECRET must be configured/);
+  } finally {
+    if (original === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = original;
+  }
+});

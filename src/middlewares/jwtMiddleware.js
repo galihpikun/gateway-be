@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import prisma from "../service/prisma.js";
+import { requireJwtSecret } from "../utils/generateToken.js";
 
 dotenv.config();
 
@@ -24,7 +25,7 @@ export async function jwtMiddleware(req, res, next) {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "default_jwt_secret");
+    const decoded = jwt.verify(token, requireJwtSecret());
     const userId = decoded.sub || decoded.id;
 
     if (!userId) {

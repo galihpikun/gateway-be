@@ -3,6 +3,12 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+export function requireJwtSecret() {
+  const secret = process.env.JWT_SECRET;
+  if (!secret?.trim()) throw new Error("JWT_SECRET must be configured");
+  return secret;
+}
+
 export const generateToken = (params, res) => {
   const userId = params.id || params.userId || params.sub;
   const payload = {
@@ -14,7 +20,7 @@ export const generateToken = (params, res) => {
     ...(params.fullName && { fullName: params.fullName }),
   };
 
-  const token = jwt.sign(payload, process.env.JWT_SECRET || "default_jwt_secret", {
+  const token = jwt.sign(payload, requireJwtSecret(), {
     expiresIn: process.env.JWT_EXPIRES_IN || "7d",
   });
 
