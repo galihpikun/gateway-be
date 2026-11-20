@@ -2,7 +2,7 @@ import { withEventLock } from "../utils/eventLock.js";
 import { validPreviewVideo, validTicketBackground, validViewPosition } from "../utils/previewValidation.js";
 import { isVenueLayout, isLayoutZone, eventReviewIssue } from "../utils/venueLayout.js";
 import prisma, { Prisma } from "../service/prisma.js";
-import CloudinaryService from "../service/cloudinaryService.js";
+import { uploadEventMedia, removeUnreferencedEventMedia, replacedEventMedia } from "../service/eventMediaService.js";
 import AuditLogService from "../service/auditLogService.js";
 import RefundService from "../service/refundService.js";
 import { buildPaginatedResponse } from "../utils/paginate.js";
@@ -100,6 +100,7 @@ export const createEvent = async (req, res) => {
   const dto = req.body;
   const files = req.files || {};
 
+  const uploaded = [];
   try {
     let tiers = [];
     try { tiers = req.body.ticketTypes ? JSON.parse(req.body.ticketTypes) : []; }
@@ -219,12 +220,8 @@ export const createEvent = async (req, res) => {
     const isRefundable =
       dto.isRefundable === undefined || dto.isRefundable === true || dto.isRefundable === "true";
 
-    const [coverUpload, venueUpload, previewUpload, ticketBackgroundUpload] = await Promise.all([
-      CloudinaryService.uploadImage(coverImage),
-      venueImage ? CloudinaryService.uploadImage(venueImage) : null,
-      CloudinaryService.uploadVideo(previewVideo),
-      CloudinaryService.uploadImage(ticketBackground),
-    ]);
+    const [coverUpload, venueUpload, previewUpload, ticketBackgroundUpload] =
+      await uploadEventMedia({ coverImage, venueImage, previewVideo, ticketBackground }, uploaded);
 
     const event = await prisma.$transaction(async (tx) => {
       const created = await tx.event.create({
@@ -263,11 +260,13 @@ export const createEvent = async (req, res) => {
       return created;
     });
 
+    uploaded.length = 0;
     return res.status(201).json({
       message: "Event created successfully",
       event,
     });
   } catch (error) {
+    await removeUnreferencedEventMedia(uploaded);
     console.error("Create event error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }
@@ -279,6 +278,7 @@ export const updateEvent = async (req, res) => {
   const dto = req.body;
   const files = req.files || {};
 
+  const uploaded = [];
   try {
     const event = await prisma.event.findUnique({
       where: { id: eventId },
@@ -340,12 +340,8 @@ export const updateEvent = async (req, res) => {
       }
     }
 
-    const previewUpload = previewVideo ? await CloudinaryService.uploadVideo(previewVideo) : null;
-    let coverUpload;
-    if (coverImage) coverUpload = await CloudinaryService.uploadImage(coverImage);
-    let venueUpload;
-    if (venueImage) venueUpload = await CloudinaryService.uploadImage(venueImage);
-    const ticketBackgroundUpload = ticketBackground ? await CloudinaryService.uploadImage(ticketBackground) : null;
+    const [coverUpload, venueUpload, previewUpload, ticketBackgroundUpload] =
+      await uploadEventMedia({ coverImage, venueImage, previewVideo, ticketBackground }, uploaded);
 
     const isRefundable =
       dto.isRefundable !== undefined
@@ -381,11 +377,14 @@ export const updateEvent = async (req, res) => {
       });
     });
 
+    uploaded.length = 0;
+    await removeUnreferencedEventMedia(replacedEventMedia(event, updatedEvent));
     return res.status(200).json({
       message: "Event updated successfully",
       event: updatedEvent,
     });
   } catch (error) {
+    await removeUnreferencedEventMedia(uploaded);
     if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
     if (error.code === "P2025") return res.status(409).json({ message: "The event status changed. Reload it and try again." });
     console.error("Update event error:", error);

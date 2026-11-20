@@ -59,9 +59,22 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
       assert.ok(options.expires_at <= Math.floor(Date.now() / 1000) + 600);
       return 'https://example.invalid/signed/' + id;
     });
+    let raceEventId, failingDeleteId;
+    const destroyed = [];
+    const destroy = t.mock.method(cloudinary.uploader, 'destroy', async (id, options) => {
+      const references = await prisma.event.count({ where: { OR: [{ coverImageId: id }, { venueImageId: id }, { previewVideoId: id }, { ticketBackgroundId: id }] } });
+      destroyed.push({ id, options, references });
+      if (id === failingDeleteId) throw new Error('Stubbed provider failure');
+      return { result: 'ok' };
+    });
     CloudinaryService.uploadImage = async (file, folder, resourceType, deliveryType) => {
       deliveryTypes.push(deliveryType);
       if (deliveryType === 'authenticated') return { public_id: 'qa_r2_document', secure_url: 'https://example.invalid/demo/image/authenticated/qa_r2_document.png' };
+      if (file.originalname === 'qa_r2_conflict.mp4') {
+        await prisma.event.update({ where: { id: raceEventId }, data: { status: 'PENDING_REVIEW' } });
+        return { public_id: 'qa_r2_conflict_' + suffix, secure_url: 'https://example.invalid/test.mp4' };
+      }
+      if (resourceType === 'video') return { public_id: 'qa_r2_preview_' + file.originalname + suffix, secure_url: 'https://example.invalid/test.mp4' };
       return { public_id: 'test-only-image', secure_url: resourceType === 'video' ? 'https://example.invalid/test.mp4' : 'https://example.invalid/test.jpg' };
     };
     RefundService.createXenditRefund = async payload => {
@@ -120,15 +133,36 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     await request(`/ticket-types/${tiers[0].id}`, organizer, 'PUT', {viewPosition:'seat-42'},400);
     await request(`/ticket-types/${tiers[0].id}`, buyer, 'PUT', {viewPosition:'REAR'},403);
     assert.equal((await request(`/ticket-types/${tiers[0].id}`, organizer, 'PUT', {viewPosition:'BALCONY'})).viewPosition,'BALCONY');
+    raceEventId = eventId;
+    const conflict = new FormData();
+    conflict.set('previewVideo', new Blob(['0000ftyp'], { type: 'video/mp4' }), 'qa_r2_conflict.mp4');
+    await request(`/events/${eventId}`, organizer, 'PATCH', conflict, 409);
+    assert.deepEqual(destroyed, [{ id: 'qa_r2_conflict_' + suffix, options: { resource_type: 'video', invalidate: true }, references: 0 }]);
+    await prisma.event.update({ where: { id: eventId }, data: { status: 'DRAFT' } });
+    assert.equal((await request(`/events/organizer/${eventId}`, organizer)).previewVideoId, created.event.previewVideoId);
+    const shared = await prisma.event.create({ data: {
+      organizerId: organizer.id, categoryId: category.id, title: 'qa_r2_shared_' + suffix, description: 'Media fixture', location: 'Test',
+      coverImageUrl: 'https://example.invalid/shared.jpg', coverImageId: 'qa_r2_shared_cover_' + suffix,
+      previewVideoId: created.event.previewVideoId, startDatetime: new Date(created.event.startDatetime), endDatetime: new Date(created.event.endDatetime),
+    } });
     const removePreview = new FormData();removePreview.set('removePreviewVideo','true');
     await request(`/events/${eventId}`,organizer,'PATCH',removePreview);
     assert.equal((await request(`/events/organizer/${eventId}`,organizer)).previewVideoUrl,null);
+    assert.equal(destroy.mock.callCount(), 1, 'a shared asset is retained');
+    await request(`/events/${shared.id}`, organizer, 'PATCH', removePreview);
+    assert.deepEqual(destroyed.at(-1), { id: created.event.previewVideoId, options: { resource_type: 'video', invalidate: true }, references: 0 });
+    assert.equal(destroy.mock.callCount(), 2, 'old asset is deleted only after the final DB reference is gone');
     assert.equal(tiers.length, 1, 'event and tiers must be created atomically');
     await request(`/events/${eventId}/submit`, organizer, 'PATCH', undefined, 409);
     const outdoor = new FormData();
     outdoor.set('venueLayout', 'ICE_BSD');
     outdoor.set('previewVideo', new Blob(['0000ftyp'], { type: 'video/mp4' }), 'preview.mp4');
-    await request(`/events/${eventId}`, organizer, 'PATCH', outdoor);
+    const firstOutdoor = await request(`/events/${eventId}`, organizer, 'PATCH', outdoor);
+    failingDeleteId = firstOutdoor.event.previewVideoId;
+    outdoor.set('previewVideo', new Blob(['0000ftyp'], { type: 'video/mp4' }), 'qa_r2_replacement.mp4');
+    const replacement = await request(`/events/${eventId}`, organizer, 'PATCH', outdoor);
+    assert.notEqual(replacement.event.previewVideoId, failingDeleteId);
+    assert.deepEqual(destroyed.at(-1), { id: failingDeleteId, options: { resource_type: 'video', invalidate: true }, references: 0 });
     await request(`/events/${eventId}/submit`, organizer, 'PATCH', undefined, 409);
     await request(`/ticket-types/${tiers[0].id}`, organizer, 'PUT', { viewPosition: 'BALCONY' }, 400);
     await request(`/ticket-types/${tiers[0].id}`, organizer, 'PUT', { viewPosition: 'REAR' });

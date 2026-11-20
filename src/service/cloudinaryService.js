@@ -11,6 +11,16 @@ cloudinary.config({
 
 export class CloudinaryService {
   static async uploadVideo(file) { return this.uploadImage(file, "ticket-booking/previews", "video"); }
+  static async deleteMedia(publicId, resourceType) {
+    const response = await cloudinary.uploader.destroy(publicId, {
+      resource_type: resourceType,
+      invalidate: true,
+    });
+    if (!["ok", "not found"].includes(response.result)) {
+      throw new Error("Cloudinary did not confirm media deletion");
+    }
+  }
+
   static async uploadOrganizerDocument(file) {
     return this.uploadImage(file, "ticket-booking/organizer-documents", "image", "authenticated");
   }
