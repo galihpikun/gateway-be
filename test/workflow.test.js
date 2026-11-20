@@ -145,7 +145,7 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     assert.equal(created.event.venueLayout, 'INDONESIA_ARENA');
     assert.equal(created.event.ticketBackgroundUrl, 'https://example.invalid/test.jpg');
     const eventId = created.event.id; eventIds.push(eventId);
-    const tiers = await request(`/ticket-types/event/${eventId}`);
+    const tiers = await request(`/ticket-types/event/${eventId}`, organizer);
     assert.equal(created.event.previewVideoUrl, 'https://example.invalid/test.mp4');
     assert.equal(tiers[0].viewPosition, 'FRONT');
     await request(`/ticket-types/${tiers[0].id}`, organizer, 'PUT', {viewPosition:'seat-42'},400);
@@ -186,6 +186,7 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     await request(`/ticket-types/${tiers[0].id}`, organizer, 'PUT', { viewPosition: 'REAR' });
     await request(`/events/${eventId}/submit`, organizer, 'PATCH');
     await request(`/events/admin/${eventId}/approve`, admin, 'PATCH');
+    assert.equal((await request(`/ticket-types/event/${eventId}`))[0].id, tiers[0].id);
     await request(`/events/organizer/${eventId}/staff`, organizer, 'POST', { userId: staff.id });
     assert.equal((await request('/staff/events', staff)).length, 1);
     await request('/orders', buyer, 'POST', { items: [{ ticketTypeId: tiers[0].id, quantity: -1 }] }, 400);

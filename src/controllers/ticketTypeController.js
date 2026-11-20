@@ -3,15 +3,28 @@ import { validViewPosition } from "../utils/previewValidation.js";
 import prisma from "../service/prisma.js";
 import { isLayoutZone } from "../utils/venueLayout.js";
 
+const tierVisibility = { organizerId: true, status: true, endDatetime: true };
+
+function canReadEventTiers(event, actor) {
+  return event && (
+    (event.status === "PUBLISHED" && event.endDatetime > new Date()) ||
+    event.organizerId === actor?.id ||
+    actor?.role === "ADMIN"
+  );
+}
+
 export const getTicketTypes = async (req, res) => {
   const { eventId } = req.params;
 
   try {
-    const ticketTypes = await prisma.ticketType.findMany({
-      where: { eventId },
+    const event = await prisma.event.findUnique({
+      where: { id: eventId },
+      select: { ...tierVisibility, ticketTypes: true },
     });
-
-    return res.status(200).json(ticketTypes);
+    if (!canReadEventTiers(event, req.user)) {
+      return res.status(404).json({ statusCode: 404, message: "Event not found" });
+    }
+    return res.set("Cache-Control", "private, no-store").status(200).json(event.ticketTypes);
   } catch (error) {
     console.error("Get ticket types error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
@@ -22,15 +35,15 @@ export const getTicketTypeDetail = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const ticketType = await prisma.ticketType.findUnique({
+    const result = await prisma.ticketType.findUnique({
       where: { id },
+      include: { event: { select: tierVisibility } },
     });
-
-    if (!ticketType) {
-      return res.status(404).json({ statusCode: 404, message: "Ticket Type with this id does not exists" });
+    if (!canReadEventTiers(result?.event, req.user)) {
+      return res.status(404).json({ statusCode: 404, message: "Ticket type not found" });
     }
-
-    return res.status(200).json(ticketType);
+    const { event, ...ticketType } = result;
+    return res.set("Cache-Control", "private, no-store").status(200).json(ticketType);
   } catch (error) {
     console.error("Get ticket type detail error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });

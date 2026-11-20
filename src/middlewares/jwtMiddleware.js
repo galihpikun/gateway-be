@@ -80,5 +80,10 @@ export async function jwtMiddleware(req, res, next) {
   }
 }
 
+export function optionalAuth(req, res, next) {
+  if (req.headers.authorization || req.cookies?.jwt) return jwtMiddleware(req, res, next);
+  next();
+}
+
 export const requireAuth = jwtMiddleware;
 export default jwtMiddleware;

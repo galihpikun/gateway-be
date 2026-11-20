@@ -6,12 +6,12 @@ import {
   updateTicketType,
   deleteTicketType,
 } from "../controllers/ticketTypeController.js";
-import { jwtMiddleware } from "../middlewares/jwtMiddleware.js";
+import { jwtMiddleware, optionalAuth } from "../middlewares/jwtMiddleware.js";
 
 const router = express.Router();
 
-router.get("/event/:eventId", getTicketTypes);
-router.get("/:id", getTicketTypeDetail);
+router.get("/event/:eventId", optionalAuth, getTicketTypes);
+router.get("/:id", optionalAuth, getTicketTypeDetail);
 
 router.post("/event/:eventId", jwtMiddleware, createTicketType);
 router.put("/:id", jwtMiddleware, updateTicketType);
