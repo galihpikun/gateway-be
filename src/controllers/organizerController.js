@@ -3,6 +3,14 @@ import CloudinaryService from "../service/cloudinaryService.js";
 import AuditLogService from "../service/auditLogService.js";
 import { buildPaginatedResponse } from "../utils/paginate.js";
 
+function documentForViewer(document) {
+  return { ...document, fileUrl: CloudinaryService.organizerDocumentUrl(document) };
+}
+
+function organizerForViewer(organizer) {
+  return { ...organizer, documents: organizer.documents.map(documentForViewer) };
+}
+
 export const applyOrganizer = async (req, res) => {
   const userId = req.user?.userId || req.user?.id;
   const {
@@ -89,10 +97,10 @@ export const applyOrganizer = async (req, res) => {
       organizationRegistrationUpload,
       identityCardUpload,
     ] = await Promise.all([
-      CloudinaryService.uploadImage(businessLicense),
-      CloudinaryService.uploadImage(guaranteeLetter),
-      CloudinaryService.uploadImage(organizationRegistration),
-      CloudinaryService.uploadImage(identityCard),
+      CloudinaryService.uploadOrganizerDocument(businessLicense),
+      CloudinaryService.uploadOrganizerDocument(guaranteeLetter),
+      CloudinaryService.uploadOrganizerDocument(organizationRegistration),
+      CloudinaryService.uploadOrganizerDocument(identityCard),
     ]);
 
     if (existingOrganizer) {
@@ -187,7 +195,7 @@ export const getMyOrganizerProfile = async (req, res) => {
       });
     }
 
-    return res.status(200).json(organizer);
+    return res.set("Cache-Control", "private, no-store").status(200).json(organizerForViewer(organizer));
   } catch (error) {
     console.error("Get my organizer error:", error);
     return res.status(500).json({
@@ -562,7 +570,7 @@ export const getAllOrganizerApplications = async (req, res) => {
       prisma.organizerProfile.count({ where }),
     ]);
 
-    return res.status(200).json(buildPaginatedResponse(organizers, total, page, limit));
+    return res.set("Cache-Control", "private, no-store").status(200).json(buildPaginatedResponse(organizers.map(organizerForViewer), total, page, limit));
   } catch (error) {
     console.error("Get all organizers error:", error);
     return res.status(500).json({
@@ -600,7 +608,7 @@ export const getOrganizerDetail = async (req, res) => {
       });
     }
 
-    return res.status(200).json(organizer);
+    return res.set("Cache-Control", "private, no-store").status(200).json(organizerForViewer(organizer));
   } catch (error) {
     console.error("Get organizer detail error:", error);
     return res.status(500).json({
@@ -644,9 +652,9 @@ export const approveDocument = async (req, res) => {
       return result;
     });
 
-    return res.status(200).json({
+    return res.set("Cache-Control", "private, no-store").status(200).json({
       message: "Document approved successfully",
-      document: updated,
+      document: documentForViewer(updated),
     });
   } catch (error) {
     console.error("Approve doc error:", error);
@@ -703,9 +711,9 @@ export const rejectDocument = async (req, res) => {
       return result;
     });
 
-    return res.status(200).json({
+    return res.set("Cache-Control", "private, no-store").status(200).json({
       message: "Document rejected successfully",
-      document: updated,
+      document: documentForViewer(updated),
     });
   } catch (error) {
     console.error("Reject doc error:", error);

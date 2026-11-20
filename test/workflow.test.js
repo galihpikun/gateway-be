@@ -1,3 +1,4 @@
+import { v2 as cloudinary } from "cloudinary";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -10,7 +11,7 @@ import RefundService from '../src/service/refundService.js';
 import CloudinaryService from '../src/service/cloudinaryService.js';
 import { processQueuedTicketEmails } from '../src/service/ticketEmailService.js';
 
-test('HTTP workflow: organizer review, atomic event, staff, payment, refund, recovery and late payment', async () => {
+test('HTTP workflow: organizer review, atomic event, staff, payment, refund, recovery and late payment', async (t) => {
   const suffix = randomUUID();
   const ids = [], eventIds = [], orderIds = [];
   const previousPayment = PaymentService.createPaymentSession;
@@ -50,7 +51,19 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
       assert.equal(customer.fullName, contact.fullName);
       return { paymentSessionId: `ps-${order.id}`, paymentUrl: 'https://example.invalid/test-checkout' };
     };
-    CloudinaryService.uploadImage = async (file, folder, resourceType) => ({ public_id: 'test-only-image', secure_url: resourceType === 'video' ? 'https://example.invalid/test.mp4' : 'https://example.invalid/test.jpg' });
+    const deliveryTypes = [];
+    const signer = t.mock.method(cloudinary.utils, 'private_download_url', (id, format, options) => {
+      assert.equal(options.type, 'authenticated');
+      assert.equal(format, 'png');
+      assert.ok(options.expires_at > Math.floor(Date.now() / 1000));
+      assert.ok(options.expires_at <= Math.floor(Date.now() / 1000) + 600);
+      return 'https://example.invalid/signed/' + id;
+    });
+    CloudinaryService.uploadImage = async (file, folder, resourceType, deliveryType) => {
+      deliveryTypes.push(deliveryType);
+      if (deliveryType === 'authenticated') return { public_id: 'qa_r2_document', secure_url: 'https://example.invalid/demo/image/authenticated/qa_r2_document.png' };
+      return { public_id: 'test-only-image', secure_url: resourceType === 'video' ? 'https://example.invalid/test.mp4' : 'https://example.invalid/test.jpg' };
+    };
     RefundService.createXenditRefund = async payload => {
       assert.match(payload.paymentId, /^py-/);
       assert.ok(payload.amount > 0);
@@ -76,7 +89,16 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     for (const [key, value] of Object.entries({ organizationName: 'Workflow Org', phoneNumber: '000', address: 'Test', bankName: 'Test', bankAccountNumber: '000', bankAccountName: 'Test' })) form.set(key, value);
     for (const name of ['businessLicense', 'guaranteeLetter', 'organizationRegistration', 'identityCard']) form.set(name, new Blob(['test'], { type: 'image/png' }), 'test.png');
     await request('/organizer/apply', organizer, 'POST', form, 200);
+    assert.deepEqual(deliveryTypes, Array(4).fill('authenticated'));
     const profile = await request('/organizer/me', organizer);
+    assert.ok(profile.documents.every(doc => doc.fileUrl === 'https://example.invalid/signed/qa_r2_document'));
+    assert.equal(signer.mock.callCount(), 4);
+    const administrativeProfile = await request('/organizer/admin/' + profile.id, admin);
+    assert.ok(administrativeProfile.documents.every(doc => doc.fileUrl === 'https://example.invalid/signed/qa_r2_document'));
+    const legacy = profile.documents[0];
+    await prisma.organizerDocument.update({ where: { id: legacy.id }, data: { fileUrl: 'https://example.invalid/legacy.png' } });
+    assert.equal((await request('/organizer/me', organizer)).documents.find(doc => doc.id === legacy.id).fileUrl, 'https://example.invalid/legacy.png');
+
     for (const doc of profile.documents) await request(`/organizer/admin/documents/${doc.id}/approve`, admin, 'PATCH');
     await request(`/organizer/admin/${profile.id}/approve`, admin, 'PATCH');
     assert.equal((await request('/auth/me', organizer)).data.organizerProfile.status, 'APPROVED');
