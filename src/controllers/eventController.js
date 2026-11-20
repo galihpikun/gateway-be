@@ -5,26 +5,24 @@ import prisma, { Prisma } from "../service/prisma.js";
 import { uploadEventMedia, removeUnreferencedEventMedia, replacedEventMedia } from "../service/eventMediaService.js";
 import AuditLogService from "../service/auditLogService.js";
 import RefundService from "../service/refundService.js";
-import { buildPaginatedResponse } from "../utils/paginate.js";
+import { buildPaginatedResponse, parsePagination, PaginationError } from "../utils/paginate.js";
 
-export const getEvents = async (req, res) => {
+export const getEvents = async (req, res, next) => {
   try {
+    const { page, limit, skip, requested } = parsePagination(req.query);
+    const where = { status: "PUBLISHED", endDatetime: { gt: new Date() } };
     const events = await prisma.event.findMany({
-      where: {
-        status: "PUBLISHED",
-        endDatetime: { gt: new Date() },
-      },
-      include: {
-        category: true,
-        ticketTypes: true,
-      },
-      orderBy: {
-        startDatetime: "asc",
-      },
+      where,
+      include: { category: true, ticketTypes: true },
+      orderBy: [{ startDatetime: "asc" }, { id: "asc" }],
+      ...(requested && { skip, take: limit }),
     });
 
-    return res.status(200).json(events);
+    if (!requested) return res.status(200).json(events);
+    const total = await prisma.event.count({ where });
+    return res.status(200).json(buildPaginatedResponse(events, total, page, limit));
   } catch (error) {
+    if (error instanceof PaginationError) return next(error);
     console.error("Get events error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }
@@ -470,11 +468,7 @@ export const completeEvent = async (req, res) => {
 };
 
 // Admin handlers
-export const getAdminEvents = async (req, res) => {
-  const page = Number(req.query.page) || 1;
-  const limit = Number(req.query.limit) || 10;
-  const skip = (page - 1) * limit;
-
+export const getAdminEvents = async (req, res, next) => {
   const where = {};
   if (req.query.status) where.status = req.query.status;
   if (req.query.categoryId) where.categoryId = req.query.categoryId;
@@ -486,6 +480,7 @@ export const getAdminEvents = async (req, res) => {
   }
 
   try {
+    const { page, limit, skip } = parsePagination(req.query);
     const [events, total] = await Promise.all([
       prisma.event.findMany({
         where,
@@ -516,6 +511,7 @@ export const getAdminEvents = async (req, res) => {
 
     return res.status(200).json(buildPaginatedResponse(events, total, page, limit));
   } catch (error) {
+    if (error instanceof PaginationError) return next(error);
     console.error("Get admin events error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }
@@ -823,13 +819,10 @@ export const cancelEvent = async (req, res) => {
 };
 
 // Organizer handlers
-export const getMyEvents = async (req, res) => {
+export const getMyEvents = async (req, res, next) => {
   const userId = req.user?.userId || req.user?.id;
-  const page = Number(req.query.page) || 1;
-  const limit = Number(req.query.limit) || 10;
-  const skip = (page - 1) * limit;
-
   try {
+    const { page, limit, skip } = parsePagination(req.query);
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: { organizerProfile: true },
@@ -868,6 +861,7 @@ export const getMyEvents = async (req, res) => {
 
     return res.status(200).json(buildPaginatedResponse(events, total, page, limit));
   } catch (error) {
+    if (error instanceof PaginationError) return next(error);
     console.error("Get my events error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }
@@ -1068,14 +1062,11 @@ export const removeOrganizerStaff = async (req, res) => {
   }
 };
 
-export const searchInvitableUsers = async (req, res) => {
+export const searchInvitableUsers = async (req, res, next) => {
   const organizerId = req.user?.userId || req.user?.id;
   const search = req.query.search || "";
-  const page = Number(req.query.page) || 1;
-  const limit = Math.min(Number(req.query.limit) || 10, 20);
-  const skip = (page - 1) * limit;
-
   try {
+    const { page, limit, skip } = parsePagination(req.query);
     const organizer = await prisma.user.findUnique({
       where: { id: organizerId },
       include: { organizerProfile: true },
@@ -1119,6 +1110,7 @@ export const searchInvitableUsers = async (req, res) => {
 
     return res.status(200).json(buildPaginatedResponse(users, total, page, limit));
   } catch (error) {
+    if (error instanceof PaginationError) return next(error);
     console.error("Search invitable users error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }

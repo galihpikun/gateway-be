@@ -4,7 +4,7 @@ import IssuedTicketService from "../service/issuedTicketService.js";
 import PaymentService from "../service/paymentService.js";
 import { RefundService } from "../service/refundService.js";
 import { parseBuyerContact } from "../utils/buyerContact.js";
-import { buildPaginatedResponse } from "../utils/paginate.js";
+import { buildPaginatedResponse, parsePagination, PaginationError } from "../utils/paginate.js";
 
 function generateOrderNumber(date) {
   const datePart = date.toISOString().slice(0, 10).replace(/-/g, "");
@@ -324,16 +324,13 @@ export const createOrder = async (req, res) => {
   }
 };
 
-export const getOrders = async (req, res) => {
+export const getOrders = async (req, res, next) => {
   const userId = req.user?.userId || req.user?.id;
   try {
+    const { page, limit, skip, requested } = parsePagination(req.query);
     await expirePendingOrders(userId);
 
-    const page = req.query?.page ? Number(req.query.page) : null;
-    const limit = req.query?.limit ? Number(req.query.limit) : null;
-
-    if (page !== null && limit !== null) {
-      const skip = (page - 1) * limit;
+    if (requested) {
       const [orders, total] = await Promise.all([
         prisma.order.findMany({
           where: { userId },
@@ -372,6 +369,7 @@ export const getOrders = async (req, res) => {
 
     return res.status(200).json(orders);
   } catch (error) {
+    if (error instanceof PaginationError) return next(error);
     console.error("Get orders error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }
@@ -429,13 +427,7 @@ export const getOrderDetail = async (req, res) => {
   }
 };
 
-export const getAdminOrders = async (req, res) => {
-  await expirePendingOrders();
-
-  const page = Number(req.query?.page) || 1;
-  const limit = Number(req.query?.limit) || 10;
-  const skip = (page - 1) * limit;
-
+export const getAdminOrders = async (req, res, next) => {
   const where = {};
   const statusFilter = req.query?.paymentStatus || req.query?.status;
   if (statusFilter) where.paymentStatus = statusFilter;
@@ -454,6 +446,8 @@ export const getAdminOrders = async (req, res) => {
   }
 
   try {
+    const { page, limit, skip } = parsePagination(req.query);
+    await expirePendingOrders();
     const [orders, total] = await Promise.all([
       prisma.order.findMany({
         where,
@@ -482,6 +476,7 @@ export const getAdminOrders = async (req, res) => {
 
     return res.status(200).json(buildPaginatedResponse(orders, total, page, limit));
   } catch (error) {
+    if (error instanceof PaginationError) return next(error);
     console.error("Get admin orders error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
   }

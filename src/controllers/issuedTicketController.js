@@ -3,7 +3,7 @@ import IssuedTicketService from "../service/issuedTicketService.js";
 export const getMyTickets = async (req, res) => {
   const userId = req.user?.userId || req.user?.id;
   try {
-    const result = await IssuedTicketService.getMyTickets(userId);
+    const result = await IssuedTicketService.getMyTickets(userId, req.query);
     return res.status(200).json(result);
   } catch (error) {
     const statusCode = error.statusCode || 500;

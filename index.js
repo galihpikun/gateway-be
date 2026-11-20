@@ -1,3 +1,4 @@
+import { PaginationError } from "./src/utils/paginate.js";
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -83,6 +84,9 @@ app.use('/', rootRouter);
 
 // Global Error Handler
 app.use((err, req, res, next) => {
+  if (err instanceof PaginationError) {
+    return res.status(400).json({ statusCode: 400, message: err.message });
+  }
   console.error('Unhandled error:', err);
   const status = err.code === "LIMIT_FILE_SIZE" ? 413 : err.status || err.statusCode || 500;
   const message = err.message || 'Internal server error';

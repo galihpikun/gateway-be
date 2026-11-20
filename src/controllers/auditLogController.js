@@ -2,18 +2,7 @@ import AuditLogService from '../service/auditLogService.js';
 
 export const findAll = async (req, res, next) => {
   try {
-    const { page, limit, search, action, entityType, actorId, dateFrom, dateTo } = req.query;
-
-    const result = await AuditLogService.findAll({
-      page: page ? parseInt(page, 10) : undefined,
-      limit: limit ? parseInt(limit, 10) : undefined,
-      search,
-      action,
-      entityType,
-      actorId,
-      dateFrom,
-      dateTo,
-    });
+    const result = await AuditLogService.findAll(req.query);
 
     return res.status(200).json(result);
   } catch (err) {

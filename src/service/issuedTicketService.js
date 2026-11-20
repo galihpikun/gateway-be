@@ -1,7 +1,7 @@
 import { gateRefundStatuses, refundBlocksGate } from "./refundService.js";
 import { randomBytes } from "crypto";
 import prisma from "./prisma.js";
-import { buildPaginatedResponse } from "../utils/paginate.js";
+import { buildPaginatedResponse, parsePagination } from "../utils/paginate.js";
 
 async function withRefundLocks(tickets) {
   if (!tickets.length) return tickets;
@@ -94,16 +94,12 @@ export class IssuedTicketService {
     return createdTickets;
   }
 
-  static async getMyTickets(userId) {
+  static async getMyTickets(userId, query) {
+    const { page, limit, skip, requested } = parsePagination(query);
+    const where = { orderItem: { order: { userId, paymentStatus: "PAID" } } };
     const tickets = await prisma.issuedTicket.findMany({
-      where: {
-        orderItem: {
-          order: {
-            userId,
-            paymentStatus: "PAID",
-          },
-        },
-      },
+      where,
+      ...(requested && { skip, take: limit }),
       include: {
         orderItem: {
           include: {
@@ -126,7 +122,10 @@ export class IssuedTicketService {
         createdAt: "desc",
       },
     });
-    return withRefundLocks(tickets);
+    const data = await withRefundLocks(tickets);
+    if (!requested) return data;
+    const total = await prisma.issuedTicket.count({ where });
+    return buildPaginatedResponse(data, total, page, limit);
   }
 
   static async getTicketDetail(userId, ticketId) {
@@ -159,9 +158,7 @@ export class IssuedTicketService {
   }
 
   static async getAdminTickets(query) {
-    const page = Number(query?.page) || 1;
-    const limit = Number(query?.limit) || 10;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(query);
 
     const where = {};
 

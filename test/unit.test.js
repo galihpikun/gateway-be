@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 
 process.env.NODE_ENV = 'test';
 
-import { buildPaginatedResponse } from '../src/utils/paginate.js';
+import { buildPaginatedResponse, parsePagination, PaginationError } from '../src/utils/paginate.js';
 import { generateToken } from '../src/utils/generateToken.js';
 import { requireRoles } from '../src/middlewares/roleMiddleware.js';
 import { RefundService, CUSTOMER_REFUND_DEDUCTION_RATE } from '../src/service/refundService.js';
@@ -14,6 +14,16 @@ import { createOrder } from '../src/controllers/orderController.js';
 import { register, login } from '../src/controllers/authController.js';
 import prisma from '../src/service/prisma.js';
 import app from '../index.js';
+
+test('QA-013 pagination validates positive integers and enforces the maximum', () => {
+  assert.deepEqual(parsePagination(), { page: 1, limit: 20, skip: 0, requested: false });
+  assert.deepEqual(parsePagination({ page: '2', limit: '100' }), { page: 2, limit: 100, skip: 100, requested: true });
+  for (const value of ['-1', '0', '1.5', 'NaN', 'foo', '', '1e2', '1.0', ['1', '2'], null, 9007199254740992]) {
+    assert.throws(() => parsePagination({ page: value }), PaginationError);
+    assert.throws(() => parsePagination({ limit: value }), PaginationError);
+  }
+  assert.throws(() => parsePagination({ limit: '101' }), PaginationError);
+});
 
 test('buildPaginatedResponse computes correct pagination metadata', () => {
   const items = [{ id: 1 }, { id: 2 }, { id: 3 }];

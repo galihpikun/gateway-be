@@ -115,6 +115,24 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     for (const doc of profile.documents) await request(`/organizer/admin/documents/${doc.id}/approve`, admin, 'PATCH');
     await request(`/organizer/admin/${profile.id}/approve`, admin, 'PATCH');
     assert.equal((await request('/auth/me', organizer)).data.organizerProfile.status, 'APPROVED');
+    const publicLists = [['/events', null], ['/orders', buyer], ['/issued-tickets/my', buyer]];
+    for (const [path, actor] of publicLists) {
+      assert.ok(Array.isArray(await request(path, actor)));
+      assert.equal((await request(path + '?limit=2', actor)).meta.limit, 2);
+    }
+    const paginatedLists = [
+      ...publicLists,
+      ...['orders', 'issued-tickets', 'events', 'organizer', 'users', 'staff', 'audit-logs', 'refunds'].map(route => ['/' + route + '/admin', admin]),
+      ['/events/organizer/my-events', organizer], ['/events/search-invitable-users', organizer],
+      ['/refunds/organizer', organizer], ['/refunds/my', buyer],
+    ];
+    for (const [path, actor] of paginatedLists) {
+      const invalid = await request(path + '?page=0', actor, 'GET', undefined, 400);
+      assert.deepEqual(invalid, { statusCode: 400, message: 'Invalid pagination: page must be a positive integer and limit must be between 1 and 100.' });
+      const valid = await request(path + '?page=1', actor);
+      assert.equal(valid.meta.page, 1);
+      assert.equal(valid.meta.limit, 20);
+    }
     const eventForm = new FormData();
     for (const [key, value] of Object.entries({ title: 'Workflow concert', description: 'Test fixture', categoryId: category.id, location: 'Test venue', startDatetime: new Date(Date.now() + 3 * 86400000).toISOString(), endDatetime: new Date(Date.now() + 4 * 86400000).toISOString(), isRefundable: 'true', ticketTypes: JSON.stringify([{ name: 'GA', price: 100000, quota: 10, viewPosition: 'FRONT' }]) })) eventForm.set(key, value);
     eventForm.set('coverImage', new Blob(['test'], { type: 'image/png' }), 'test.png');

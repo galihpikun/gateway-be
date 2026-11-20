@@ -1,12 +1,10 @@
 import prisma from '../service/prisma.js';
 import AuditLogService from '../service/auditLogService.js';
-import { buildPaginatedResponse } from '../utils/paginate.js';
+import { buildPaginatedResponse, parsePagination } from '../utils/paginate.js';
 
 export const findAll = async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = parseInt(req.query.limit, 10) || 10;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(req.query);
 
     const where = {};
 

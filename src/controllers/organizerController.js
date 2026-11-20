@@ -1,7 +1,7 @@
 import prisma from "../service/prisma.js";
 import CloudinaryService from "../service/cloudinaryService.js";
 import AuditLogService from "../service/auditLogService.js";
-import { buildPaginatedResponse } from "../utils/paginate.js";
+import { buildPaginatedResponse, parsePagination, PaginationError } from "../utils/paginate.js";
 
 function documentForViewer(document) {
   return { ...document, fileUrl: CloudinaryService.organizerDocumentUrl(document) };
@@ -531,11 +531,7 @@ export const getOrganizerStaff = async (req, res) => {
   }
 };
 
-export const getAllOrganizerApplications = async (req, res) => {
-  const page = Number(req.query.page) || 1;
-  const limit = Number(req.query.limit) || 10;
-  const skip = (page - 1) * limit;
-
+export const getAllOrganizerApplications = async (req, res, next) => {
   const where = {};
   if (req.query.status) {
     where.status = req.query.status;
@@ -549,6 +545,7 @@ export const getAllOrganizerApplications = async (req, res) => {
   }
 
   try {
+    const { page, limit, skip } = parsePagination(req.query);
     const [organizers, total] = await Promise.all([
       prisma.organizerProfile.findMany({
         where,
@@ -572,6 +569,7 @@ export const getAllOrganizerApplications = async (req, res) => {
 
     return res.set("Cache-Control", "private, no-store").status(200).json(buildPaginatedResponse(organizers.map(organizerForViewer), total, page, limit));
   } catch (error) {
+    if (error instanceof PaginationError) return next(error);
     console.error("Get all organizers error:", error);
     return res.status(500).json({
       statusCode: 500,

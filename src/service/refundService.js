@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import prisma, { Prisma } from "./prisma.js";
 import AuditLogService from "./auditLogService.js";
-import { buildPaginatedResponse } from "../utils/paginate.js";
+import { buildPaginatedResponse, parsePagination } from "../utils/paginate.js";
 
 export const CUSTOMER_REFUND_DEDUCTION_RATE = 0.05;
 export const REFUND_CALENDAR_TIMEZONE = "Asia/Jakarta";
@@ -310,9 +310,7 @@ export class RefundService {
   }
 
   static async getCustomerRefunds(userId, query, organizer = false) {
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(query);
 
     const where = {
       ...(organizer ? { event: { organizerId: userId } } : { requestedById: userId }),
@@ -379,9 +377,7 @@ export class RefundService {
   }
 
   static async getAdminRefunds(query) {
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(query);
 
     const where = {
       ...(query.status && { status: query.status }),
