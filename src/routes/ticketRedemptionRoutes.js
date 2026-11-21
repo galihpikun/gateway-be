@@ -1,6 +1,6 @@
 import express from 'express';
 import { requireAuth } from '../middlewares/jwtMiddleware.js';
-import { requireRoles } from '../middlewares/roleMiddleware.js';
+import { requireStaff } from '../middlewares/roleMiddleware.js';
 import {
   lookupTicket,
   redeemTicket,
@@ -8,7 +8,8 @@ import {
 
 const router = express.Router();
 
-router.post('/lookup', requireAuth, requireRoles('STAFF', 'ADMIN'), lookupTicket);
-router.post('/redeem', requireAuth, requireRoles('STAFF', 'ADMIN'), redeemTicket);
+router.use(requireAuth, requireStaff);
+router.post('/lookup', lookupTicket);
+router.post('/redeem', redeemTicket);
 
 export default router;

@@ -193,9 +193,15 @@ test('QA-R2 PostgreSQL role boundaries, check-in, inventory and audit trail', as
       assert.equal(tier.availableQuota, 0);
     });
 
-    await t.test('gate assignment is enforced and the same ticket can be redeemed once', async () => {
+    await t.test('only assigned staff can check in, and a ticket can be redeemed once', async () => {
       const ticket = await prisma.issuedTicket.findFirstOrThrow({ where: { orderItem: { ticketType: { eventId: liveEvent.id } } } });
       const valid = { ticketCode: ticket.ticketCode, eventId: liveEvent.id };
+      for (const account of [admin, owner, buyer]) {
+        await expect(403, 'POST', '/ticket-redemption/lookup', account, valid);
+        await expect(403, 'POST', '/ticket-redemption/redeem', account, valid);
+      }
+      const unused = await prisma.issuedTicket.findUniqueOrThrow({ where: { id: ticket.id } });
+      assert.equal(unused.isRedeemed, false);
       const pendingTicket = await expect(403, 'POST', '/ticket-redemption/lookup', pendingStaff, valid);
       assert.equal(pendingTicket.message, 'You are not assigned to this event');
       await expect(403, 'POST', '/ticket-redemption/redeem', pendingStaff, valid);
