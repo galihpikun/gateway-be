@@ -10,6 +10,8 @@ Node.js + Express + PostgreSQL + Prisma. Gunakan Node yang mendukung TypeScript 
 
 `npm run seed` bersifat opsional untuk data latihan; tidak diperlukan untuk pengujian workflow. Jangan jalankan seed pada database transaksi nyata.
 
+Kategori diperlukan untuk membuat draf konser. Dari `gateway-be`, jalankan `npx prisma studio` dan buka URL yang tercetak di terminal. Untuk menambah baris di `categories`, isi `name` dan `slug` yang unik (misalnya `RnB` dan `rnb`). Biarkan `id`, `created_at`, dan `updated_at` memakai nilai bawaan PostgreSQL setelah schema diterapkan dengan `npx prisma db push`.
+
 ## Email Resend
 
 ```env

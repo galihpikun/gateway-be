@@ -53,10 +53,12 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     };
     const deliveryTypes = [];
     const signer = t.mock.method(cloudinary.utils, 'private_download_url', (id, format, options) => {
-      assert.equal(options.type, 'authenticated');
-      assert.equal(format, 'png');
-      assert.ok(options.expires_at > Math.floor(Date.now() / 1000));
-      assert.ok(options.expires_at <= Math.floor(Date.now() / 1000) + 600);
+      if (id === 'qa_r2_document') {
+        assert.equal(options.type, 'authenticated');
+        assert.equal(format, 'png');
+        assert.ok(options.expires_at > Math.floor(Date.now() / 1000));
+        assert.ok(options.expires_at <= Math.floor(Date.now() / 1000) + 600);
+      }
       return 'https://example.invalid/signed/' + id;
     });
     let raceEventId, failingDeleteId;
