@@ -544,7 +544,7 @@ export const getAdminEventDetail = async (req, res) => {
       return res.status(404).json({ statusCode: 404, message: "Event not found" });
     }
 
-    return res.status(200).json(event);
+    return res.set("Cache-Control", "private, no-store").status(200).json(event);
   } catch (error) {
     console.error("Admin event detail error:", error);
     return res.status(500).json({ statusCode: 500, message: error.message });
@@ -1122,7 +1122,7 @@ export const inviteOrganizerStaff = async (req, res) => {
     const { eventId } = req.params;
     const targetId = req.body.userId;
     if (!targetId || targetId === actorId) return res.status(400).json({ message: "Choose another verified user" });
-    await prisma.$transaction(async tx => {
+    await withEventLock(eventId, async tx => {
       const event = await tx.event.findUnique({ where: { id: eventId }, include: { organizer: { include: { organizerProfile: true } } } });
       if (!event || event.organizerId !== actorId || event.organizer.organizerProfile?.status !== "APPROVED") throw { statusCode: 403, message: "Only the approved event organizer may invite staff" };
       if (!["DRAFT", "REJECTED", "PENDING_REVIEW", "PUBLISHED"].includes(event.status)) throw { statusCode: 409, message: "Event is closed" };

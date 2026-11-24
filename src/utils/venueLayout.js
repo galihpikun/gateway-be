@@ -16,6 +16,9 @@ export const isVenueLayout = value => typeof value === "string" && Object.hasOwn
 export const isLayoutZone = (layout, zone) => isVenueLayout(layout) && layoutZones[layout].includes(zone);
 
 export function eventReviewIssue(event) {
+  if (event.endDatetime <= new Date()) {
+    return "The event has already ended. Update the schedule before submitting it for review.";
+  }
   if (!isVenueLayout(event.venueLayout)) return "Choose a venue layout.";
   if (!event.previewVideoUrl || !event.ticketBackgroundUrl) {
     return "Upload a concert preview video and a ticket background image.";

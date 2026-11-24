@@ -184,8 +184,34 @@ test('HTTP workflow: organizer review, atomic event, staff, payment, refund, rec
     await request(`/events/${eventId}/submit`, organizer, 'PATCH', undefined, 409);
     await request(`/ticket-types/${tiers[0].id}`, organizer, 'PUT', { viewPosition: 'BALCONY' }, 400);
     await request(`/ticket-types/${tiers[0].id}`, organizer, 'PUT', { viewPosition: 'REAR' });
+    const past = { startDatetime: new Date(Date.now() - 7200000), endDatetime: new Date(Date.now() - 3600000) };
+    await prisma.event.update({ where: { id: eventId }, data: past });
+    const ended = await request(`/events/${eventId}/submit`, organizer, 'PATCH', undefined, 409);
+    assert.match(ended.message, /already ended/);
+    await prisma.event.update({ where: { id: eventId }, data: {
+      startDatetime: new Date(created.event.startDatetime), endDatetime: new Date(created.event.endDatetime),
+    } });
+
+    const search = await request('/events/search-invitable-users?search=' + encodeURIComponent(staff.email), organizer);
+    assert.equal(search.data[0].id, staff.id);
+    await request(`/events/organizer/${eventId}/staff`, organizer, 'POST', { userId: staff.id });
+    const roster = await request('/organizer/staff?eventId=' + eventId, organizer);
+    assert.deepEqual(roster.pending.map(entry => entry.userId), [staff.id]);
+    assert.deepEqual(roster.active, []);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: staff.id } })).role, 'USER');
+
     await request(`/events/${eventId}/submit`, organizer, 'PATCH');
-    await request(`/events/admin/${eventId}/approve`, admin, 'PATCH');
+    await request(`/events/${eventId}`, null, 'GET', undefined, 404);
+    const preview = await request(`/events/admin/${eventId}`, admin);
+    assert.equal(preview.title, created.event.title);
+    assert.equal(preview.status, 'PENDING_REVIEW');
+    assert.equal(preview.ticketTypes[0].viewPosition, 'REAR');
+
+    const approved = await request(`/events/admin/${eventId}/approve`, admin, 'PATCH');
+    assert.equal(approved.event.status, 'PUBLISHED');
+    const activeRoster = await request('/organizer/staff?eventId=' + eventId, organizer);
+    assert.deepEqual(activeRoster.pending, []);
+    assert.deepEqual(activeRoster.active.map(entry => entry.userId), [staff.id]);
     assert.equal((await request(`/ticket-types/event/${eventId}`))[0].id, tiers[0].id);
     await request(`/events/organizer/${eventId}/staff`, organizer, 'POST', { userId: staff.id });
     assert.equal((await request('/staff/events', staff)).length, 1);
